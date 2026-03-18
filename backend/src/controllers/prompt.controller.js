@@ -639,8 +639,16 @@ export const deletePrompt = async (req, res) => {
 
 export const optimizePrompt = async (req, res) => {
     try {
-        console.log("HEYYYYYYYY");
-        const { title, promptText, category, tags, modelSupport, isTemplate, variables } = req.body;
+        const {
+            title,
+            promptText,
+            category,
+            tags,
+            modelSupport,
+            isTemplate,
+            variables,
+        } = req.body;
+        console.log(req.dbUser);
 
         if (!promptText) {
             return res.status(400).json({ message: "No prompt text provided" });
@@ -661,7 +669,7 @@ INSTRUCTIONS FOR OPTIMIZATION:
 1. Intent & Clarity: Deeply analyze the raw prompt to understand the core objective. Reconstruct the instructions so they are unambiguous, logical, and easy for an AI to parse.
 2. Structure: Organize the prompt logically (e.g., Role, Context, Task, Constraints, Output Format). Use markdown formatting where appropriate for the prompt's internal structure.
 3. Contextual Injection: Use the provided Category and Tags to infer the domain and inject necessary context that the user might have missed (e.g., if the category is "coding", ensure the prompt asks for clean, well-documented code).
-4. Template Variables: If template variables are provided, seamlessly integrate them into the optimized prompt using the exact {{variable_name}} format. DO NOT alter the variable names or ignore them.Also if possibe u can add more template variables if required.
+4. Template Variables: If template variables are provided, seamlessly integrate them into the optimized prompt using the exact {{variable_name}} format. DO NOT alter the variable names or ignore them.Also if possibe u can add enhanced template variables if required.
 5. Model Specificity: If Target Models are provided, tailor the phrasing to abide by the best practices of those specific models.
 
 OUTPUT CONSTRAINTS (CRITICAL):
@@ -692,14 +700,6 @@ ${promptText}`;
         });
 
         const optimizedPrompt = response.text;
-
-        // const updatedPrompt = await Prompt.findByIdAndUpdate(
-        //     req.auth.userId,
-        //     {
-        //         promptText: optimizedPrompt,
-        //     },
-        //     { new: true },
-        // );
         res.json(optimizedPrompt);
     } catch (error) {
         console.error("OPTIMIZE PROMPT ERROR:", error);

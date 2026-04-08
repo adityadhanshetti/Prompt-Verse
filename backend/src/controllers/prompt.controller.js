@@ -3,8 +3,18 @@ import PromptVersion from "../models/PromptVersion.model.js";
 import Follow from "../models/Follow.model.js";
 import User from "../models/User.model.js";
 import Collection from "../models/Collection.model.js";
+import Post from "../models/Post.model.js";
+import Notification from "../models/Notification.model.js";
 import { createNotification } from "../utils/createNotification.js";
-import { GoogleGenAI } from "@google/genai";
+// import { GoogleGenAI } from "@google/genai"; // Kept for fallback reference
+import { runOptimizationPipeline } from "../services/ollamaOptimizer.js";
+import {
+    upsertPromptToQdrant,
+    deletePromptFromQdrant,
+    searchSimilarPrompts,
+} from "../services/qdrant.service.js";
+import { generateEmbedding } from "../services/embedding.service.js";
+import Interaction from "../models/Interaction.model.js";
 
 import { config } from "dotenv";
 config();
@@ -49,13 +59,25 @@ export const createPrompt = async (req, res) => {
             category: category || "general",
             modelSupport: modelSupport || [],
             visibility: visibility || "public",
-            createdByClerkId: clerkUserId,
-            createdByMongoDBObjectId: mongoDBUser._id,
+            authorId: mongoDBUser._id,
 
             // IMPORTANT FIX
             isTemplate: Boolean(isTemplate),
             variables: Boolean(isTemplate) ? variables || [] : [],
         });
+
+        // Add to Qdrant for Semantic Search
+        try {
+            const textToEmbed = `${prompt.title}. ${prompt.promptText} tags: ${prompt.tags.join(" ")} category: ${prompt.category}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            await upsertPromptToQdrant(prompt._id, embedding, {
+                visibility: prompt.visibility,
+                category: prompt.category,
+                isTemplate: prompt.isTemplate,
+            });
+        } catch (e) {
+            console.error("Failed to generate/upsert embedding:", e);
+        }
 
         res.status(201).json(prompt);
     } catch (error) {
@@ -67,11 +89,28 @@ export const createPrompt = async (req, res) => {
 export const getAllPrompts = async (req, res) => {
     try {
         const { search, category, tag, isTemplate, model, sort } = req.query;
+        const useSemantic = Boolean(search);
+
+        let semanticIds = null;
+        let qdrantResults = [];
+
+        if (search) {
+            try {
+                const embedding = await generateEmbedding(search);
+                qdrantResults = await searchSimilarPrompts(embedding, 50);
+                semanticIds = qdrantResults
+                    .map((p) => p.payload?.mongoId)
+                    .filter(Boolean);
+            } catch (e) {
+                console.error("Semantic search failed", e);
+            }
+        }
 
         const query = { visibility: "public" };
 
-        // search title, promptText, tags, category, modelSupport
-        if (search) {
+        if (semanticIds && semanticIds.length > 0) {
+            query._id = { $in: semanticIds };
+        } else if (search) {
             query.$or = [
                 { title: { $regex: search, $options: "i" } },
                 { promptText: { $regex: search, $options: "i" } },
@@ -79,39 +118,38 @@ export const getAllPrompts = async (req, res) => {
                 { category: { $regex: search, $options: "i" } },
                 { modelSupport: { $regex: search, $options: "i" } },
             ];
+
+            if (!semanticIds || semanticIds.length === 0) {
+                console.warn(
+                    "Semantic search returned no IDs; falling back to text search.",
+                );
+            }
         }
 
-        // category filter
         if (category) {
             query.category = category;
         }
 
-        // tag filter
         if (tag) {
             query.tags = { $in: [tag] };
         }
 
-        // template filter
         if (isTemplate === "true") {
             query.isTemplate = true;
         }
 
-        // model filter
         if (model) {
             query.modelSupport = { $in: [model] };
         }
 
-        let sortQuery = { createdAt: -1 };
+        let sortQuery = {};
+        let shouldSortByRelevance = false;
 
-        // sorting
-        if (sort === "new") sortQuery = { createdAt: -1 };
         if (sort === "likes") sortQuery = { likesCount: -1 };
-        if (sort === "forks") sortQuery = { forksCount: -1 };
-        if (sort === "copies") sortQuery = { copiesCount: -1 };
-        if (sort === "saves") sortQuery = { savesCount: -1 };
-
-        // trending formula (basic)
-        if (sort === "trending") {
+        else if (sort === "forks") sortQuery = { forksCount: -1 };
+        else if (sort === "copies") sortQuery = { copiesCount: -1 };
+        else if (sort === "saves") sortQuery = { savesCount: -1 };
+        else if (sort === "trending") {
             sortQuery = {
                 likesCount: -1,
                 forksCount: -1,
@@ -119,15 +157,53 @@ export const getAllPrompts = async (req, res) => {
                 savesCount: -1,
                 createdAt: -1,
             };
+        } else if (semanticIds && semanticIds.length > 0) {
+            shouldSortByRelevance = true;
+        } else {
+            sortQuery = { createdAt: -1 };
         }
 
-        const prompts = await Prompt.find(query)
-            .populate("createdByMongoDBObjectId")
-            .sort(sortQuery)
-            .limit(200);
-        // console.log(prompts);
+        let promptQuery = Prompt.find(query).populate("authorId");
+        if (Object.keys(sortQuery).length > 0) {
+            promptQuery = promptQuery.sort(sortQuery);
+        }
 
-        res.json(prompts);
+        let prompts = await promptQuery;
+
+        if (shouldSortByRelevance && semanticIds && semanticIds.length > 0) {
+            const orderMap = new Map(
+                semanticIds.map((id, index) => [id.toString(), index]),
+            );
+            prompts = prompts.sort(
+                (a, b) =>
+                    (orderMap.get(a._id.toString()) ??
+                        Number.MAX_SAFE_INTEGER) -
+                    (orderMap.get(b._id.toString()) ?? Number.MAX_SAFE_INTEGER),
+            );
+        }
+
+        let myLikedIds = [];
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                targetType: "Prompt",
+            });
+            myLikedIds = interactions
+                .filter((i) => i.interactionType === "LIKE")
+                .map((i) => i.targetId.toString());
+            mySavedIds = interactions
+                .filter((i) => i.interactionType === "SAVE")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enrichedPrompts = prompts.map((prompt) => ({
+            ...prompt.toObject(),
+            isLiked: myLikedIds.includes(prompt._id.toString()),
+            isSaved: mySavedIds.includes(prompt._id.toString()),
+        }));
+
+        res.json(enrichedPrompts);
     } catch (error) {
         console.error("GET PROMPTS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -138,16 +214,52 @@ export const getAllPrompts = async (req, res) => {
 // GET /api/prompts/:id
 export const getPromptById = async (req, res) => {
     try {
-        const prompt = await Prompt.findById(req.params.id).populate(
-            "createdByMongoDBObjectId",
-        );
-        // console.log(prompt, "Prompt\n");
+        const prompt = await Prompt.findById(req.params.id)
+            .populate("authorId")
+            .populate({
+                path: "forkedFrom",
+                select: "title authorId category tags forksCount likesCount",
+                populate: { path: "authorId", select: "username clerkId" },
+            })
+            .populate({
+                path: "forkedFromUser",
+                select: "username clerkId",
+            });
 
         if (!prompt) {
             return res.status(404).json({ message: "Prompt not found" });
         }
 
-        res.json(prompt);
+        // Enrich with isLiked/isSaved/hasForked for the current user
+        let isLiked = false;
+        let isSaved = false;
+        let hasForked = false;
+        if (req.dbUser) {
+            const [likeInteraction, saveInteraction, existingFork] =
+                await Promise.all([
+                    Interaction.findOne({
+                        userId: req.dbUser._id,
+                        targetId: prompt._id,
+                        interactionType: "LIKE",
+                    }),
+                    Interaction.findOne({
+                        userId: req.dbUser._id,
+                        targetId: prompt._id,
+                        interactionType: "SAVE",
+                    }),
+                    Prompt.findOne({
+                        forkedFrom: prompt._id,
+                        authorId: req.dbUser._id,
+                    }).select("_id title"),
+                ]);
+            isLiked = !!likeInteraction;
+            isSaved = !!saveInteraction;
+            hasForked = existingFork
+                ? { _id: existingFork._id, title: existingFork.title }
+                : false;
+        }
+
+        res.json({ ...prompt.toObject(), isLiked, isSaved, hasForked });
     } catch (error) {
         console.error("GET PROMPT ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -167,7 +279,7 @@ export const incrementCopyCount = async (req, res) => {
         prompt.copiesCount += 1;
         await prompt.save();
 
-        res.json({ message: "Copy count incremented" });
+        res.json({ message: "Copy count incremented", copiesCount: prompt.copiesCount });
     } catch (error) {
         console.error("COPY ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -182,22 +294,50 @@ export const forkPrompt = async (req, res) => {
 
         if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-        const originalPrompt = await Prompt.findById(req.params.id);
+        const originalPrompt = await Prompt.findById(req.params.id).populate(
+            "authorId",
+            "username clerkId",
+        );
 
         if (!originalPrompt) {
             return res.status(404).json({ message: "Prompt not found" });
         }
 
-        const forkedPrompt = await Prompt.create({
-            title: `${originalPrompt.title} (Fork)`,
-            promptText: originalPrompt.promptText,
-            tags: originalPrompt.tags,
-            category: originalPrompt.category,
-            modelSupport: originalPrompt.modelSupport,
-            visibility: "public",
-            createdByClerkId: userId,
+        // Prevent duplicate forks by the same user
+        const existingFork = await Prompt.findOne({
             forkedFrom: originalPrompt._id,
-            forkedFromUser: originalPrompt.createdByClerkId,
+            authorId: req.dbUser._id,
+        });
+
+        if (existingFork) {
+            return res.status(409).json({
+                message: "You have already forked this prompt",
+                existingFork: {
+                    _id: existingFork._id,
+                    title: existingFork.title,
+                },
+            });
+        }
+
+        // Accept optional customization from request body
+        const {
+            title: customTitle,
+            promptText: customText,
+            tags: customTags,
+            category: customCategory,
+            visibility: customVisibility,
+        } = req.body;
+
+        const forkedPrompt = await Prompt.create({
+            title: customTitle || `${originalPrompt.title} (Fork)`,
+            promptText: customText || originalPrompt.promptText,
+            tags: customTags || originalPrompt.tags,
+            category: customCategory || originalPrompt.category,
+            modelSupport: originalPrompt.modelSupport,
+            visibility: customVisibility || "public",
+            authorId: req.dbUser._id,
+            forkedFrom: originalPrompt._id,
+            forkedFromUser: originalPrompt.authorId._id,
             isTemplate: originalPrompt.isTemplate,
             variables: originalPrompt.variables,
         });
@@ -205,16 +345,40 @@ export const forkPrompt = async (req, res) => {
         originalPrompt.forksCount += 1;
         await originalPrompt.save();
 
-        // notification
-        await createNotification({
-            userId: originalPrompt.createdByClerkId,
-            fromUserId: userId,
-            type: "fork",
-            promptId: originalPrompt._id,
-            message: "forked your prompt",
-        });
+        // Index forked prompt into Qdrant for semantic search
+        try {
+            const textToEmbed = `${forkedPrompt.title}. ${forkedPrompt.promptText} tags: ${forkedPrompt.tags.join(" ")} category: ${forkedPrompt.category}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            await upsertPromptToQdrant(forkedPrompt._id, embedding, {
+                visibility: forkedPrompt.visibility,
+                category: forkedPrompt.category,
+                isTemplate: forkedPrompt.isTemplate,
+            });
+        } catch (e) {
+            console.error("Failed to index forked prompt to Qdrant:", e);
+        }
 
-        res.status(201).json(forkedPrompt);
+        // notification (don't notify if forking own prompt)
+        if (originalPrompt.authorId._id.toString() !== req.dbUser._id.toString()) {
+            await createNotification({
+                recipientId: originalPrompt.authorId._id,
+                senderId: req.dbUser._id,
+                type: "fork",
+                targetId: originalPrompt._id,
+                targetType: "Prompt",
+            });
+        }
+
+        // Populate before returning
+        const populatedFork = await Prompt.findById(forkedPrompt._id)
+            .populate("authorId", "username clerkId")
+            .populate({
+                path: "forkedFrom",
+                select: "title authorId",
+                populate: { path: "authorId", select: "username clerkId" },
+            });
+
+        res.status(201).json(populatedFork);
     } catch (error) {
         console.error("FORK ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -225,11 +389,18 @@ export const forkPrompt = async (req, res) => {
 // GET /api/prompts/:id/forks
 export const getForksOfPrompt = async (req, res) => {
     try {
-        const forks = await Prompt.find({ forkedFrom: req.params.id }).sort({
-            createdAt: -1,
-        });
+        const forks = await Prompt.find({ forkedFrom: req.params.id })
+            .populate("authorId", "username clerkId")
+            .select(
+                "title promptText tags category authorId likesCount copiesCount forksCount savesCount createdAt",
+            )
+            .sort({ createdAt: -1 });
 
-        res.json(forks);
+        // Return total count alongside the forks array
+        res.json({
+            forks,
+            totalForks: forks.length,
+        });
     } catch (error) {
         console.error("GET FORKS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -249,7 +420,7 @@ export const updatePrompt = async (req, res) => {
         if (!prompt)
             return res.status(404).json({ message: "Prompt not found" });
 
-        if (prompt.createdByClerkId !== userId) {
+        if (prompt.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -274,7 +445,7 @@ export const updatePrompt = async (req, res) => {
             visibility: prompt.visibility,
             isTemplate: prompt.isTemplate,
             variables: prompt.variables,
-            editedBy: userId,
+            editedBy: req.dbUser._id,
         });
 
         // Update prompt with new values
@@ -300,6 +471,19 @@ export const updatePrompt = async (req, res) => {
 
         await prompt.save();
 
+        // Update Qdrant vector for Semantic Search
+        try {
+            const textToEmbed = `${prompt.title}. ${prompt.promptText} tags: ${prompt.tags.join(" ")} category: ${prompt.category}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            await upsertPromptToQdrant(prompt._id, embedding, {
+                visibility: prompt.visibility,
+                category: prompt.category,
+                isTemplate: prompt.isTemplate,
+            });
+        } catch (e) {
+            console.error("Failed to update embedding:", e);
+        }
+
         res.json(prompt);
     } catch (error) {
         console.log("UPDATE ERROR:", error);
@@ -314,9 +498,14 @@ export const getPromptVersions = async (req, res) => {
     try {
         const versions = await PromptVersion.find({
             promptId: req.params.id,
-        }).sort({ createdAt: -1 });
+        })
+            .populate("editedBy", "username clerkId")
+            .sort({ createdAt: -1 });
 
-        res.json(versions);
+        res.json({
+            versions,
+            totalVersions: versions.length,
+        });
     } catch (error) {
         console.error("GET VERSIONS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -337,7 +526,7 @@ export const restorePromptVersion = async (req, res) => {
         if (!prompt)
             return res.status(404).json({ message: "Prompt not found" });
 
-        if (prompt.createdByClerkId !== userId) {
+        if (prompt.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -347,23 +536,54 @@ export const restorePromptVersion = async (req, res) => {
             return res.status(404).json({ message: "Version not found" });
         }
 
-        // save current as new version
+        // save current state as a new version before restoring
+        const latestVersion = await PromptVersion.findOne({
+            promptId: prompt._id,
+        })
+            .sort({ versionNumber: -1 })
+            .lean();
+
+        const nextVersionNumber = latestVersion
+            ? latestVersion.versionNumber + 1
+            : 1;
+
         await PromptVersion.create({
             promptId: prompt._id,
+            versionNumber: nextVersionNumber,
             title: prompt.title,
             promptText: prompt.promptText,
             tags: prompt.tags,
             category: prompt.category,
+            modelSupport: prompt.modelSupport,
+            visibility: prompt.visibility,
+            isTemplate: prompt.isTemplate,
+            variables: prompt.variables,
             changeNote: "Restored previous version",
-            createdByClerkId: userId,
+            editedBy: req.dbUser._id,
         });
 
         prompt.title = version.title;
         prompt.promptText = version.promptText;
         prompt.tags = version.tags;
         prompt.category = version.category;
+        prompt.modelSupport = version.modelSupport;
+        prompt.visibility = version.visibility;
+        prompt.isTemplate = version.isTemplate;
+        prompt.variables = version.variables;
 
         await prompt.save();
+
+        try {
+            const textToEmbed = `${prompt.title}. ${prompt.promptText} tags: ${prompt.tags.join(" ")} category: ${prompt.category}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            await upsertPromptToQdrant(prompt._id, embedding, {
+                visibility: prompt.visibility,
+                category: prompt.category,
+                isTemplate: prompt.isTemplate,
+            });
+        } catch (e) {
+            console.error("Failed to update embedding after restore:", e);
+        }
 
         res.json(prompt);
     } catch (error) {
@@ -386,28 +606,40 @@ export const toggleLikePrompt = async (req, res) => {
         if (!prompt)
             return res.status(404).json({ message: "Prompt not found" });
 
-        const alreadyLiked = prompt.likedBy.includes(userId);
+        const interaction = await Interaction.findOne({
+            userId: req.dbUser._id,
+            targetId: prompt._id,
+            interactionType: "LIKE",
+        });
 
-        if (alreadyLiked) {
-            prompt.likedBy = prompt.likedBy.filter((id) => id !== userId);
+        if (interaction) {
+            await Interaction.findByIdAndDelete(interaction._id);
             prompt.likesCount = Math.max(0, prompt.likesCount - 1);
         } else {
-            prompt.likedBy.push(userId);
+            await Interaction.create({
+                userId: req.dbUser._id,
+                targetId: prompt._id,
+                targetType: "Prompt",
+                interactionType: "LIKE",
+            });
             prompt.likesCount += 1;
 
-            await createNotification({
-                userId: prompt.createdByClerkId,
-                fromUserId: userId,
-                type: "like",
-                promptId: prompt._id,
-                message: "liked your prompt",
-            });
+            if (prompt.authorId.toString() !== req.dbUser._id.toString()) {
+                await createNotification({
+                    recipientId: prompt.authorId,
+                    senderId: req.dbUser._id,
+                    type: "like",
+                    targetId: prompt._id,
+                    targetType: "Prompt",
+                    message: "liked your prompt",
+                });
+            }
         }
 
         await prompt.save();
 
         res.json({
-            liked: !alreadyLiked,
+            liked: !interaction,
             likesCount: prompt.likesCount,
         });
     } catch (error) {
@@ -430,28 +662,40 @@ export const toggleSavePrompt = async (req, res) => {
         if (!prompt)
             return res.status(404).json({ message: "Prompt not found" });
 
-        const alreadySaved = prompt.savedBy.includes(userId);
+        const interaction = await Interaction.findOne({
+            userId: req.dbUser._id,
+            targetId: prompt._id,
+            interactionType: "SAVE",
+        });
 
-        if (alreadySaved) {
-            prompt.savedBy = prompt.savedBy.filter((id) => id !== userId);
+        if (interaction) {
+            await Interaction.findByIdAndDelete(interaction._id);
             prompt.savesCount = Math.max(0, prompt.savesCount - 1);
         } else {
-            prompt.savedBy.push(userId);
+            await Interaction.create({
+                userId: req.dbUser._id,
+                targetId: prompt._id,
+                targetType: "Prompt",
+                interactionType: "SAVE",
+            });
             prompt.savesCount += 1;
 
-            await createNotification({
-                userId: prompt.createdByClerkId,
-                fromUserId: userId,
-                type: "save",
-                promptId: prompt._id,
-                message: "saved your prompt",
-            });
+            if (prompt.authorId.toString() !== req.dbUser._id.toString()) {
+                await createNotification({
+                    recipientId: prompt.authorId,
+                    senderId: req.dbUser._id,
+                    type: "save",
+                    targetId: prompt._id,
+                    targetType: "Prompt",
+                    message: "saved your prompt",
+                });
+            }
         }
 
         await prompt.save();
 
         res.json({
-            saved: !alreadySaved,
+            saved: !interaction,
             savesCount: prompt.savesCount,
         });
     } catch (error) {
@@ -487,7 +731,7 @@ export const getTrendingPrompts = async (req, res) => {
         }
 
         const prompts = await Prompt.find(query)
-            .populate("createdByMongoDBObjectId")
+            .populate("authorId")
             .sort({
                 likesCount: -1,
                 forksCount: -1,
@@ -497,7 +741,28 @@ export const getTrendingPrompts = async (req, res) => {
             })
             .limit(50);
 
-        res.json(prompts);
+        let myLikedIds = [];
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                targetType: "Prompt",
+            });
+            myLikedIds = interactions
+                .filter((i) => i.interactionType === "LIKE")
+                .map((i) => i.targetId.toString());
+            mySavedIds = interactions
+                .filter((i) => i.interactionType === "SAVE")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enrichedPrompts = prompts.map((prompt) => ({
+            ...prompt.toObject(),
+            isLiked: myLikedIds.includes(prompt._id.toString()),
+            isSaved: mySavedIds.includes(prompt._id.toString()),
+        }));
+
+        res.json(enrichedPrompts);
     } catch (error) {
         console.error("TRENDING ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -512,20 +777,42 @@ export const getPromptsFeed = async (req, res) => {
         if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
         // find who user follows
-        const following = await Follow.find({ followerId: userId }).select(
-            "followingId",
-        );
+        const following = await Follow.find({
+            followerId: req.dbUser._id,
+        }).select("followingId");
 
         const followingIds = following.map((f) => f.followingId);
 
         const prompts = await Prompt.find({
-            createdByClerkId: { $in: followingIds },
+            authorId: { $in: followingIds },
             visibility: "public",
         })
+            .populate("authorId")
             .sort({ createdAt: -1 })
             .limit(100);
 
-        res.json(prompts);
+        let myLikedIds = [];
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                targetType: "Prompt",
+            });
+            myLikedIds = interactions
+                .filter((i) => i.interactionType === "LIKE")
+                .map((i) => i.targetId.toString());
+            mySavedIds = interactions
+                .filter((i) => i.interactionType === "SAVE")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enrichedPrompts = prompts.map((prompt) => ({
+            ...prompt.toObject(),
+            isLiked: myLikedIds.includes(prompt._id.toString()),
+            isSaved: mySavedIds.includes(prompt._id.toString()),
+        }));
+
+        res.json(enrichedPrompts);
     } catch (error) {
         console.log("FEED ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -536,12 +823,39 @@ export const getPromptsByUserId = async (req, res) => {
     try {
         const userId = req.params.id;
 
-        const prompts = await Prompt.find({
-            createdByClerkId: userId,
-            visibility: "public",
-        }).sort({ createdAt: -1 });
+        const targetUser = await User.findOne({ clerkId: userId });
+        if (!targetUser)
+            return res.status(404).json({ message: "User not found" });
 
-        res.json(prompts);
+        const prompts = await Prompt.find({
+            authorId: targetUser._id,
+            visibility: "public",
+        })
+            .populate("authorId")
+            .sort({ createdAt: -1 });
+
+        let myLikedIds = [];
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                targetType: "Prompt",
+            });
+            myLikedIds = interactions
+                .filter((i) => i.interactionType === "LIKE")
+                .map((i) => i.targetId.toString());
+            mySavedIds = interactions
+                .filter((i) => i.interactionType === "SAVE")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enrichedPrompts = prompts.map((prompt) => ({
+            ...prompt.toObject(),
+            isLiked: myLikedIds.includes(prompt._id.toString()),
+            isSaved: mySavedIds.includes(prompt._id.toString()),
+        }));
+
+        res.json(enrichedPrompts);
     } catch (error) {
         console.log("GET USER PROMPTS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -553,12 +867,42 @@ export const getSavedPrompts = async (req, res) => {
         const userId = req.auth?.userId;
         if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
-        const prompts = await Prompt.find({
-            savedBy: userId,
-            visibility: "public",
-        }).sort({ createdAt: -1 });
+        const savedInteractions = await Interaction.find({
+            userId: req.dbUser._id,
+            targetType: "Prompt",
+            interactionType: "SAVE",
+        });
+        const savedPromptIds = savedInteractions.map((i) => i.targetId);
 
-        res.json(prompts);
+        const prompts = await Prompt.find({
+            _id: { $in: savedPromptIds },
+            visibility: "public",
+        })
+            .populate("authorId")
+            .sort({ createdAt: -1 });
+
+        let myLikedIds = [];
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                targetType: "Prompt",
+            });
+            myLikedIds = interactions
+                .filter((i) => i.interactionType === "LIKE")
+                .map((i) => i.targetId.toString());
+            mySavedIds = interactions
+                .filter((i) => i.interactionType === "SAVE")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enrichedPrompts = prompts.map((prompt) => ({
+            ...prompt.toObject(),
+            isLiked: myLikedIds.includes(prompt._id.toString()),
+            isSaved: mySavedIds.includes(prompt._id.toString()),
+        }));
+
+        res.json(enrichedPrompts);
     } catch (error) {
         console.log("GET SAVED PROMPTS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -577,18 +921,48 @@ export const deletePrompt = async (req, res) => {
         if (!prompt)
             return res.status(404).json({ message: "Prompt not found" });
 
-        if (prompt.createdByClerkId !== userId) {
+        if (prompt.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
         // Delete the prompt
         await Prompt.findByIdAndDelete(promptId);
 
-        // Remove this prompt from all collections
+        // ── Cascade cleanup ──────────────────────────────────────────
+
+        // 1. Remove this prompt from all collections
         await Collection.updateMany(
             { "prompts.promptId": promptId },
             { $pull: { prompts: { promptId } } },
         );
+
+        // 2. Delete all Interactions (likes/saves) referencing this prompt
+        await Interaction.deleteMany({ targetId: promptId, targetType: "Prompt" });
+
+        // 3. Delete all Notifications referencing this prompt
+        await Notification.deleteMany({ promptId });
+
+        // 4. Delete all PromptVersions for this prompt
+        await PromptVersion.deleteMany({ promptId });
+
+        // 5. Unlink this prompt from any Posts that referenced it
+        await Post.updateMany(
+            { linkedPromptId: promptId },
+            { $set: { linkedPromptId: null } },
+        );
+
+        // 6. Clear forkedFrom reference in prompts forked from this one
+        await Prompt.updateMany(
+            { forkedFrom: promptId },
+            { $set: { forkedFrom: null } },
+        );
+
+        // 7. Delete from Qdrant
+        try {
+            await deletePromptFromQdrant(promptId);
+        } catch (e) {
+            console.error("Failed to delete Qdrant point:", e);
+        }
 
         res.json({ message: "Prompt deleted successfully" });
     } catch (error) {
@@ -648,59 +1022,22 @@ export const optimizePrompt = async (req, res) => {
             isTemplate,
             variables,
         } = req.body;
-        console.log(req.dbUser);
 
         if (!promptText) {
             return res.status(400).json({ message: "No prompt text provided" });
         }
-        const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }); // Uses process.env.GEMINI_API_KEY
 
-        const systemInstruction = `You are an elite, world-class Prompt Engineer. Your objective is to optimize a user's raw prompt instructions into a highly precise, structured, and production-ready prompt. 
-
-You will be provided with the following metadata about the prompt:
-- Title
-- Raw Prompt (The user's initial instructions)
-- Category
-- Tags
-- Target Models (The models this prompt is intended for)
-- Template Variables (If the prompt is dynamic, these are the placeholders like {{variable_name}})
-
-INSTRUCTIONS FOR OPTIMIZATION:
-1. Intent & Clarity: Deeply analyze the raw prompt to understand the core objective. Reconstruct the instructions so they are unambiguous, logical, and easy for an AI to parse.
-2. Structure: Organize the prompt logically (e.g., Role, Context, Task, Constraints, Output Format). Use markdown formatting where appropriate for the prompt's internal structure.
-3. Contextual Injection: Use the provided Category and Tags to infer the domain and inject necessary context that the user might have missed (e.g., if the category is "coding", ensure the prompt asks for clean, well-documented code).
-4. Template Variables: If template variables are provided, seamlessly integrate them into the optimized prompt using the exact {{variable_name}} format. DO NOT alter the variable names or ignore them.Also if possibe u can add enhanced template variables if required.
-5. Model Specificity: If Target Models are provided, tailor the phrasing to abide by the best practices of those specific models.
-
-OUTPUT CONSTRAINTS (CRITICAL):
-- Your response must contain ONLY the final, optimized prompt text.
-- DO NOT wrap the output in markdown code blocks.(example : #,** etc)
-- DO NOT prefix the output with phrases like "Here is the optimized prompt:".
-- DO NOT provide explanations, pleasantries, or commentary.
-- Just output the raw, concentrated instruction text ready to be injected straight back into the user's text area.`;
-
-        const userMessage = `Optimize the following prompt.
-
-Title: ${title || "None"}
-Category: ${category || "None"}
-Tags: ${tags && tags.length > 0 ? tags.join(", ") : "None"}
-Target Models: ${modelSupport && modelSupport.length > 0 ? modelSupport.join(", ") : "None"}
-Has Variables: ${isTemplate ? "Yes" : "No"}
-Variables: ${isTemplate && variables?.length > 0 ? JSON.stringify(variables) : "None"}
-
-RAW PROMPT:
-${promptText}`;
-
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: userMessage,
-            config: {
-                systemInstruction: systemInstruction,
-            },
+        const result = await runOptimizationPipeline({
+            title,
+            promptText,
+            category,
+            tags,
+            modelSupport,
+            isTemplate,
+            variables,
         });
 
-        const optimizedPrompt = response.text;
-        res.json(optimizedPrompt);
+        res.json(result);
     } catch (error) {
         console.error("OPTIMIZE PROMPT ERROR:", error);
         res.status(500).json({ message: error.message });

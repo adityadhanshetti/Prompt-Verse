@@ -32,15 +32,11 @@ const promptSchema = new mongoose.Schema(
             default: [],
         },
 
-        createdByClerkId: {
-            type: String, // Clerk userId
-            required: true,
-        },
-
-        createdByMongoDBObjectId: {
+        authorId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
             required: true,
+            index: true,
         },
 
         isTemplate: {
@@ -64,19 +60,12 @@ const promptSchema = new mongoose.Schema(
         },
 
         forkedFromUser: {
-            type: String, // Clerk userId of original owner
+            type: mongoose.Schema.Types.ObjectId, // User ObjectId of original owner
+            ref: "User",
             default: null,
         },
 
-        likedBy: {
-            type: [String], // Clerk userIds
-            default: [],
-        },
-
-        savedBy: {
-            type: [String], // Clerk userIds
-            default: [],
-        },
+// Removed likedBy and savedBy arrays; these are now managed by the Interaction model.
 
         copiesCount: {
             type: Number,

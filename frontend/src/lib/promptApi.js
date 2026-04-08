@@ -36,7 +36,6 @@ export const fetchPromptsAdvanced = async ({
     if (sort) params.append("sort", sort);
 
     const res = await api.get(`/api/prompts?${params.toString()}`);
-    console.log(res.data, "DATA");
     return res.data;
 };
 
@@ -47,7 +46,6 @@ export const createPrompt = async (promptData, token) => {
             Authorization: `Bearer ${token}`,
         },
     });
-    console.log(promptData, "Prompt Data");
 
     return res.data;
 };
@@ -58,17 +56,17 @@ export const fetchPromptById = async (id) => {
     return res.data;
 };
 
-// PATCH copy count
+// POST copy count
 export const incrementCopyCount = async (id) => {
-    const res = await api.patch(`/api/prompts/${id}/copy`);
+    const res = await api.post(`/api/prompts/${id}/copy`);
     return res.data;
 };
 
-// POST fork prompt
-export const forkPrompt = async (id, token) => {
+// POST fork prompt (with optional customization)
+export const forkPrompt = async (id, token, data = {}) => {
     const res = await api.post(
         `/api/prompts/${id}/fork`,
-        {},
+        data,
         {
             headers: {
                 Authorization: `Bearer ${token}`,
@@ -82,12 +80,12 @@ export const forkPrompt = async (id, token) => {
 // GET forks list
 export const fetchForks = async (id) => {
     const res = await api.get(`/api/prompts/${id}/forks`);
-    return res.data;
+    return res.data; // { forks: [...], totalForks: N }
 };
 
 export const fetchVersions = async (id) => {
     const res = await api.get(`/api/prompts/${id}/versions`);
-    return res.data;
+    return res.data; // { versions: [...], totalVersions: N }
 };
 
 export const restoreVersion = async (id, versionId, token) => {
@@ -139,12 +137,41 @@ export const deletePromptById = async (id, token) => {
     return res.data;
 };
 
-// POST optimize prompt
+// POST optimize prompt (Ollama dual-LLM pipeline — may take several minutes)
 export const optimizePromptText = async (payload, token) => {
     const res = await api.post("/api/prompts/optimize", payload, {
         headers: {
             Authorization: `Bearer ${token}`,
         },
+        timeout: 600000, // 10 min — pipeline may retry up to 3 attempts
     });
+    return res.data;
+};
+
+// POST toggle like prompt (protected)
+export const toggleLikePrompt = async (id, token) => {
+    const res = await api.post(
+        `/api/prompts/${id}/like`,
+        {},
+        {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        },
+    );
+    return res.data;
+};
+
+// POST toggle save prompt (protected)
+export const toggleSavePrompt = async (id, token) => {
+    const res = await api.post(
+        `/api/prompts/${id}/save`,
+        {},
+        {
+            headers: {
+                Authorization: `Bearer ${token}`,
+            },
+        },
+    );
     return res.data;
 };

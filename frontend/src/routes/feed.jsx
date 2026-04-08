@@ -367,7 +367,7 @@ function PostCard({ post }) {
     const queryClient = useQueryClient();
 
     const clerkUserId = user?.id;
-    const isLiked = post.likedBy?.includes(clerkUserId);
+    const isLiked = post.isLiked;
 
     const likeMutation = useMutation({
         mutationFn: async () => {
@@ -380,7 +380,7 @@ function PostCard({ post }) {
         },
     });
 
-    const author = post.createdByMongoDBObjectId;
+    const author = post.authorId;
     const linkedPrompt = post.linkedPromptId;
 
     return (
@@ -389,7 +389,7 @@ function PostCard({ post }) {
             <div className="flex items-center gap-3 mb-4">
                 <Link
                     to="/user/$id"
-                    params={{ id: post.createdByClerkId }}
+                    params={{ id: post.authorId?.clerkId }}
                     className="flex items-center gap-3 group/author"
                 >
                     <div className="size-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-sm font-bold text-white shrink-0 group-hover/author:ring-2 group-hover/author:ring-blue-500/30 transition-all">

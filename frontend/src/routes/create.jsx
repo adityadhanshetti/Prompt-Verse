@@ -634,8 +634,9 @@ function CreatePromptForm() {
             return optimizePromptText(payload, token);
         },
         onSuccess: (data) => {
-            if (data) {
-                setPromptText(data);
+            if (data?.optimizedPrompt) {
+                setPromptText(data.optimizedPrompt);
+                setPipelineInfo(data.pipeline);
             }
         },
         onError: (error) => {
@@ -643,12 +644,36 @@ function CreatePromptForm() {
         },
     });
 
+    // ─── Pipeline UI State ────────────────────────────────────────────────
+    const [pipelineInfo, setPipelineInfo] = useState(null);
+    const [optimizePhase, setOptimizePhase] = useState(0);
+
+    const OPTIMIZE_PHASES = [
+        "NEURAL OPTIMIZATION…",
+        "DEEP REASONING…",
+        "SYNTHESIZING…",
+        "QUALITY VERIFICATION…",
+        "REFINING OUTPUT…",
+        "ALMOST THERE…",
+    ];
+
+    // Rotate loading messages during optimization
+    useEffect(() => {
+        if (optimizeMutation.status !== "pending") {
+            setOptimizePhase(0);
+            return;
+        }
+        const timer = setInterval(() => {
+            setOptimizePhase((prev) => (prev + 1) % OPTIMIZE_PHASES.length);
+        }, 4000);
+        return () => clearInterval(timer);
+    }, [optimizeMutation.status]);
+
     const handleOptimizePrompt = () => {
         if (!promptText.trim()) return;
+        setPipelineInfo(null);
         optimizeMutation.mutate();
     };
-
-    console.log(optimizeMutation, "optimizeMutation.data");
 
     const addVariable = () => {
         setVariables([
@@ -738,30 +763,66 @@ function CreatePromptForm() {
                                 <label className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] ml-1">
                                     Neural Instruction Set
                                 </label>
-                                <button
-                                    type="button"
-                                    onClick={handleOptimizePrompt}
-                                    disabled={
-                                        optimizeMutation.status === "pending" ||
-                                        !promptText.trim()
-                                    }
-                                    className="text-[10px] font-black flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-all disabled:opacity-30 border border-blue-500/30 relative overflow-hidden active:scale-95"
-                                >
-                                    <Sparkles
-                                        size={14}
-                                        className={
+                                <div className="flex items-center gap-2">
+                                    {/* Pipeline score badge (shown after optimization) */}
+                                    {pipelineInfo &&
+                                        optimizeMutation.status !==
+                                            "pending" && (
+                                            <div
+                                                className={`flex items-center gap-1.5 text-[10px] font-bold px-3 py-1.5 rounded-lg border transition-all animate-in fade-in slide-in-from-right-2 ${
+                                                    pipelineInfo.passed
+                                                        ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                                        : "bg-amber-500/10 text-amber-400 border-amber-500/20"
+                                                }`}
+                                            >
+                                                <span>
+                                                    {pipelineInfo.passed
+                                                        ? "✓"
+                                                        : "⚠"}
+                                                </span>
+                                                <span>
+                                                    Score{" "}
+                                                    {pipelineInfo.finalScore}/10
+                                                </span>
+                                                <span className="text-slate-600">
+                                                    ·
+                                                </span>
+                                                <span>
+                                                    {pipelineInfo.totalAttempts}{" "}
+                                                    attempt
+                                                    {pipelineInfo.totalAttempts >
+                                                    1
+                                                        ? "s"
+                                                        : ""}
+                                                </span>
+                                            </div>
+                                        )}
+                                    <button
+                                        type="button"
+                                        onClick={handleOptimizePrompt}
+                                        disabled={
                                             optimizeMutation.status ===
-                                            "pending"
-                                                ? "animate-spin"
-                                                : ""
+                                                "pending" || !promptText.trim()
                                         }
-                                    />
-                                    <span className="relative z-10">
-                                        {optimizeMutation.status === "pending"
-                                            ? "RECONSTRUCTING..."
-                                            : "AI OPTIMIZE"}
-                                    </span>
-                                </button>
+                                        className="text-[10px] font-black flex items-center gap-2 px-4 py-2 rounded-xl bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 transition-all disabled:opacity-30 border border-blue-500/30 relative overflow-hidden active:scale-95"
+                                    >
+                                        <Sparkles
+                                            size={14}
+                                            className={
+                                                optimizeMutation.status ===
+                                                "pending"
+                                                    ? "animate-pulse"
+                                                    : ""
+                                            }
+                                        />
+                                        <span className="relative z-10">
+                                            {optimizeMutation.status ===
+                                            "pending"
+                                                ? OPTIMIZE_PHASES[optimizePhase]
+                                                : "AI OPTIMIZE"}
+                                        </span>
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="relative group overflow-hidden rounded-[2rem] border border-white/10 bg-[#050507] shadow-2xl">

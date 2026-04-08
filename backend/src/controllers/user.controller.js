@@ -2,6 +2,7 @@ import Prompt from "../models/Prompt.model.js";
 import Post from "../models/Post.model.js";
 import Collection from "../models/Collection.model.js";
 import Follow from "../models/Follow.model.js";
+import Interaction from "../models/Interaction.model.js";
 import User from "../models/User.model.js";
 import clerkClient from "../configs/clerkClient.js";
 
@@ -17,6 +18,9 @@ export const getUserProfileStats = async (req, res) => {
             return res.status(400).json({ message: "UserId is required" });
         }
 
+        const targetUser = await User.findOne({ clerkId: userId });
+        const targetMongoId = targetUser?._id;
+
         const [
             followersCount,
             followingCount,
@@ -24,26 +28,29 @@ export const getUserProfileStats = async (req, res) => {
             collectionsCount,
             postsCount,
         ] = await Promise.all([
-            Follow.countDocuments({ followingId: userId }),
-            Follow.countDocuments({ followerId: userId }),
+            Follow.countDocuments({ followingId: targetMongoId }),
+            Follow.countDocuments({ followerId: targetMongoId }),
             Prompt.countDocuments({
-                createdByClerkId: userId,
+                authorId: targetMongoId,
                 visibility: "public",
             }),
             Collection.countDocuments({
-                createdByClerkId: userId,
+                authorId: targetMongoId,
                 visibility: "public",
             }),
             Post.countDocuments({
-                createdByClerkId: userId,
+                authorId: targetMongoId,
                 visibility: "public",
             }),
         ]);
 
-        // Count saved prompts (prompts where this user is in savedBy array)
-        const savedPromptsCount = await Prompt.countDocuments({
-            savedBy: { $in: [userId] },
-        });
+        const savedPromptsCount = targetUser
+            ? await Interaction.countDocuments({
+                  userId: targetMongoId,
+                  interactionType: "SAVE",
+                  targetType: "Prompt",
+              })
+            : 0;
 
         return res.status(200).json({
             userId,
@@ -130,36 +137,38 @@ export const getMyUser = async (req, res) => {
  */
 export const getUserFollowers = async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const clerkUserId = req.params.userId;
 
-        if (!userId) {
+        if (!clerkUserId) {
             return res.status(400).json({ message: "UserId is required" });
         }
 
-        // People who follow this user => followingId === userId
-        const followDocs = await Follow.find({ followingId: userId })
+        // Convert Clerk ID to MongoDB ID
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // People who follow this user => followingId === user._id
+        const followDocs = await Follow.find({ followingId: user._id })
             .sort({ createdAt: -1 })
             .limit(100);
 
         const followerIds = followDocs.map((f) => f.followerId);
 
-        // Resolve each follower via Clerk (batch)
-        const followers = [];
-        for (const fId of followerIds) {
-            try {
-                const u = await clerkClient.users.getUser(fId);
-                followers.push({
-                    id: u.id,
-                    username: u.username || null,
-                    fullName: `${u.firstName || ""} ${u.lastName || ""}`.trim(),
-                    avatar: u.imageUrl || null,
-                });
-            } catch {
-                // Skip if the user can't be found
-            }
-        }
+        // Get follower users from MongoDB and resolve via Clerk
+        const followerUsers = await User.find({ _id: { $in: followerIds } });
+        const followerMap = {};
+        followerUsers.forEach((u) => {
+            followerMap[u.clerkId] = {
+                id: u.clerkId,
+                username: u.username || null,
+                fullName: u.fullName || null,
+                avatar: u.avatar || null,
+            };
+        });
 
-        return res.status(200).json(followers);
+        return res.status(200).json(Object.values(followerMap));
     } catch (error) {
         console.error("GET FOLLOWERS ERROR:", error.message);
         return res.status(500).json({ message: "Failed to fetch followers" });
@@ -172,35 +181,38 @@ export const getUserFollowers = async (req, res) => {
  */
 export const getUserFollowing = async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const clerkUserId = req.params.userId;
 
-        if (!userId) {
+        if (!clerkUserId) {
             return res.status(400).json({ message: "UserId is required" });
         }
 
-        // People this user follows => followerId === userId
-        const followDocs = await Follow.find({ followerId: userId })
+        // Convert Clerk ID to MongoDB ID
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        // People this user follows => followerId === user._id
+        const followDocs = await Follow.find({ followerId: user._id })
             .sort({ createdAt: -1 })
             .limit(100);
 
         const followingIds = followDocs.map((f) => f.followingId);
 
-        const following = [];
-        for (const fId of followingIds) {
-            try {
-                const u = await clerkClient.users.getUser(fId);
-                following.push({
-                    id: u.id,
-                    username: u.username || null,
-                    fullName: `${u.firstName || ""} ${u.lastName || ""}`.trim(),
-                    avatar: u.imageUrl || null,
-                });
-            } catch {
-                // Skip if the user can't be found
-            }
-        }
+        // Get following users from MongoDB
+        const followingUsers = await User.find({ _id: { $in: followingIds } });
+        const followingMap = {};
+        followingUsers.forEach((u) => {
+            followingMap[u.clerkId] = {
+                id: u.clerkId,
+                username: u.username || null,
+                fullName: u.fullName || null,
+                avatar: u.avatar || null,
+            };
+        });
 
-        return res.status(200).json(following);
+        return res.status(200).json(Object.values(followingMap));
     } catch (error) {
         console.error("GET FOLLOWING ERROR:", error.message);
         return res.status(500).json({ message: "Failed to fetch following" });
@@ -219,11 +231,14 @@ export const getUserPosts = async (req, res) => {
             return res.status(400).json({ message: "UserId is required" });
         }
 
+        const targetUser = await User.findOne({ clerkId: userId });
+        const targetMongoId = targetUser?._id;
+
         const posts = await Post.find({
-            createdByClerkId: userId,
+            authorId: targetMongoId,
             visibility: "public",
         })
-            .populate("createdByMongoDBObjectId")
+            .populate("authorId")
             .populate(
                 "linkedPromptId",
                 "title category modelSupport tags isTemplate _id",

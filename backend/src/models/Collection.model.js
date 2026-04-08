@@ -20,9 +20,11 @@ const collectionSchema = new mongoose.Schema(
             default: "",
         },
 
-        createdByClerkId: {
-            type: String, // Clerk userId
+        authorId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
             required: true,
+            index: true,
         },
 
         visibility: {
@@ -54,10 +56,7 @@ const collectionSchema = new mongoose.Schema(
             default: 0,
         },
 
-        savedBy: {
-            type: [String], // array of Clerk user IDs
-            default: [],
-        },
+// Removed savedBy array; now managed by the Interaction model.
     },
     { timestamps: true },
 );

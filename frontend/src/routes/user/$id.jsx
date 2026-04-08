@@ -583,40 +583,38 @@ function UserProfilePage() {
                     <div className="flex items-center gap-3 shrink-0">
                         <SignedIn>
                             {!isMyProfile && (
-                                <>
-                                    {isFollowing ? (
-                                        <button
-                                            onClick={() =>
-                                                unfollowMutation.mutate()
-                                            }
-                                            disabled={
-                                                unfollowMutation.isPending
-                                            }
-                                            className="group relative px-6 py-2.5 rounded-xl text-sm font-semibold border border-white/10 bg-white/5 hover:bg-red-500/10 hover:border-red-500/30 hover:text-red-400 text-gray-300 transition-all duration-300"
-                                        >
-                                            <span className="group-hover:hidden">
-                                                Following
-                                            </span>
-                                            <span className="hidden group-hover:inline">
-                                                {unfollowMutation.isPending
-                                                    ? "..."
-                                                    : "Unfollow"}
-                                            </span>
-                                        </button>
+                                <button
+                                    onClick={() =>
+                                        isFollowing
+                                            ? unfollowMutation.mutate()
+                                            : followMutation.mutate()
+                                    }
+                                    disabled={
+                                        followMutation.isPending ||
+                                        unfollowMutation.isPending
+                                    }
+                                    className={`inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-2xl text-sm font-semibold transition-all duration-300 border border-white/10 shadow-lg shadow-black/10 focus:outline-none focus:ring-2 focus:ring-blue-500/40 ${
+                                        isFollowing
+                                            ? "bg-white/10 text-gray-100 hover:bg-red-500/10 hover:text-red-300"
+                                            : "bg-linear-to-r from-blue-600 to-blue-500 text-white hover:from-blue-500 hover:to-blue-400"
+                                    } ${
+                                        followMutation.isPending ||
+                                        unfollowMutation.isPending
+                                            ? "cursor-wait opacity-80"
+                                            : "cursor-pointer"
+                                    }`}
+                                >
+                                    {followMutation.isPending ||
+                                    unfollowMutation.isPending ? (
+                                        <span className="animate-pulse">
+                                            Updating...
+                                        </span>
+                                    ) : isFollowing ? (
+                                        "Following"
                                     ) : (
-                                        <button
-                                            onClick={() =>
-                                                followMutation.mutate()
-                                            }
-                                            disabled={followMutation.isPending}
-                                            className="px-6 py-2.5 rounded-xl text-sm font-semibold bg-linear-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-600/20 transition-all duration-300 hover:shadow-blue-500/30 active:scale-95"
-                                        >
-                                            {followMutation.isPending
-                                                ? "Following..."
-                                                : "Follow"}
-                                        </button>
+                                        "Follow"
                                     )}
-                                </>
+                                </button>
                             )}
                             {isMyProfile && (
                                 <button

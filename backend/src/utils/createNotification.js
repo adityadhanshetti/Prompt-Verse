@@ -1,31 +1,48 @@
 import Notification from "../models/Notification.model.js";
 
 export const createNotification = async ({
-    userId,
-    fromUserId,
+    recipientId,
+    senderId,
     type,
-    promptId = null,
-    collectionId = null,
+    targetId = null,
+    targetType = null,
     message = "",
 }) => {
     try {
-        // prevent self notification
-        if (userId === fromUserId) return;
+        if (!recipientId || !senderId) return;
+        if (recipientId.toString() === senderId.toString()) return;
 
-        // prevent duplicate spam notifications (same user, same type, same prompt)
-        const exists = await Notification.findOne({
-            userId,
-            fromUserId,
+        // Auto-derive promptId / collectionId from targetId + targetType
+        const promptId = targetType === "Prompt" ? targetId : null;
+        const collectionId = targetType === "Collection" ? targetId : null;
+
+        const defaultMessages = {
+            follow: "started following you",
+            like: "liked your prompt",
+            fork: "forked your prompt",
+            save: "saved your prompt",
+            collection_add: "added your prompt to a collection",
+        };
+
+        if (!message) {
+            message = defaultMessages[type] || `${type} notification`;
+        }
+
+        const query = {
+            recipientId,
+            senderId,
             type,
-            promptId,
-            collectionId,
-        });
+        };
 
+        if (promptId) query.promptId = promptId;
+        if (collectionId) query.collectionId = collectionId;
+
+        const exists = await Notification.findOne(query);
         if (exists) return;
 
         await Notification.create({
-            userId,
-            fromUserId,
+            recipientId,
+            senderId,
             type,
             promptId,
             collectionId,

@@ -1,44 +1,47 @@
 import Notification from "../models/Notification.model.js";
-import { clerkClient } from "@clerk/express";
+import User from "../models/User.model.js";
 
 // GET /api/notifications (protected)
 export const getMyNotifications = async (req, res) => {
     try {
-        const userId = req.auth?.userId;
-        if (!userId) return res.status(401).json({ message: "Unauthorized" });
+        const clerkUserId = req.auth?.userId;
+        if (!clerkUserId)
+            return res.status(401).json({ message: "Unauthorized" });
 
-        const notifications = await Notification.find({ userId })
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) return res.status(404).json({ message: "User not found" });
+
+        const notifications = await Notification.find({ recipientId: user._id })
             .sort({ createdAt: -1 })
             .limit(50)
             .lean();
 
-        // Collect unique fromUserIds
-        const userIds = [
-            ...new Set(notifications.map((n) => n.fromUserId).filter(Boolean)),
+        const senderIds = [
+            ...new Set(
+                notifications
+                    .map((n) => n.senderId)
+                    .filter(Boolean)
+                    .map((id) => id.toString()),
+            ),
         ];
 
-        let userMap = {};
+        const senders = await User.find({
+            _id: { $in: senderIds },
+        }).lean();
 
-        if (userIds.length > 0) {
-            // Fetch only required Clerk users
-            const clerkUsers = await clerkClient.users.getUserList({
-                userId: userIds,
-            });
+        const senderMap = {};
+        senders.forEach((u) => {
+            senderMap[u._id.toString()] = {
+                id: u.clerkId,
+                username: u.username || null,
+                fullName: `${u.fullName || ""}`.trim(),
+                imageUrl: u.avatar || null,
+            };
+        });
 
-            clerkUsers.data.forEach((u) => {
-                userMap[u.id] = {
-                    id: u.id,
-                    username: u.username || null,
-                    fullName: `${u.firstName || ""} ${u.lastName || ""}`.trim(),
-                    imageUrl: u.imageUrl,
-                };
-            });
-        }
-
-        // Attach sender info
         const enriched = notifications.map((n) => ({
             ...n,
-            fromUser: userMap[n.fromUserId] || null,
+            fromUser: senderMap[n.senderId?.toString()] || null,
         }));
 
         res.json(enriched);
@@ -51,12 +54,16 @@ export const getMyNotifications = async (req, res) => {
 // GET /api/notifications/unread-count (protected)
 export const getUnreadCount = async (req, res) => {
     try {
-        const userId = req.auth?.userId;
+        const clerkUserId = req.auth?.userId;
 
-        if (!userId) return res.status(401).json({ message: "Unauthorized" });
+        if (!clerkUserId)
+            return res.status(401).json({ message: "Unauthorized" });
+
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) return res.status(404).json({ message: "User not found" });
 
         const count = await Notification.countDocuments({
-            userId,
+            recipientId: user._id,
             isRead: false,
         });
 
@@ -69,12 +76,16 @@ export const getUnreadCount = async (req, res) => {
 // PATCH /api/notifications/mark-all-read (protected)
 export const markAllRead = async (req, res) => {
     try {
-        const userId = req.auth?.userId;
+        const clerkUserId = req.auth?.userId;
 
-        if (!userId) return res.status(401).json({ message: "Unauthorized" });
+        if (!clerkUserId)
+            return res.status(401).json({ message: "Unauthorized" });
+
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) return res.status(404).json({ message: "User not found" });
 
         await Notification.updateMany(
-            { userId, isRead: false },
+            { recipientId: user._id, isRead: false },
             { $set: { isRead: true } },
         );
 

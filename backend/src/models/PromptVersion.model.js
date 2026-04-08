@@ -23,8 +23,44 @@ const promptVersionSchema = new mongoose.Schema(
             required: true,
         },
 
+        tags: {
+            type: [String],
+            default: [],
+        },
+
+        category: {
+            type: String,
+            default: "general",
+        },
+
+        modelSupport: {
+            type: [String],
+            default: [],
+        },
+
+        visibility: {
+            type: String,
+            enum: ["public", "private", "unlisted"],
+            default: "public",
+        },
+
+        isTemplate: {
+            type: Boolean,
+            default: false,
+        },
+
+        variables: [
+            {
+                key: String,
+                description: String,
+                defaultValue: String,
+                required: { type: Boolean, default: false },
+            },
+        ],
+
         editedBy: {
-            type: String, // Clerk userId
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
             required: true,
         },
 

@@ -16,7 +16,10 @@ import {
 } from "lucide-react";
 import { useAuth, useUser } from "@clerk/clerk-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchCollectionsExplore, toggleSaveCollection } from "../../lib/collectionApi.js";
+import {
+    fetchCollectionsExplore,
+    toggleSaveCollection,
+} from "../../lib/collectionApi.js";
 
 export const Route = createFileRoute("/collections/explore")({
     component: ExploreCollectionsPage,
@@ -123,10 +126,14 @@ function CollectionCard({ c, currentUserId }) {
     const creator = c.creator;
     const displayName = creator?.username
         ? `@${creator.username}`
-        : creator?.fullName ?? "unknown";
-    const avatarLetter = (creator?.username?.[0] ?? creator?.fullName?.[0] ?? "?").toUpperCase();
+        : (creator?.fullName ?? "unknown");
+    const avatarLetter = (
+        creator?.username?.[0] ??
+        creator?.fullName?.[0] ??
+        "?"
+    ).toUpperCase();
 
-    const isSaved = currentUserId ? c.savedBy?.includes(currentUserId) : false;
+    const isSaved = c.isSaved;
 
     const { getToken } = useAuth();
     const queryClient = useQueryClient();
@@ -136,33 +143,6 @@ function CollectionCard({ c, currentUserId }) {
         mutationFn: async () => {
             const token = await getToken();
             return toggleSaveCollection(c._id, token);
-        },
-        onMutate: async () => {
-            // Optimistic update across all queries that might have this collection
-            const queryKeys = queryClient.getQueriesData({ queryKey: ["exploreCollections"] });
-            
-            queryKeys.forEach(([queryKey, oldData]) => {
-                if (!oldData) return;
-                queryClient.setQueryData(queryKey, (old) => {
-                    if (!old) return old;
-                    return old.map((col) => {
-                        if (col._id === c._id) {
-                            const newSavedBy = isSaved
-                                ? col.savedBy.filter((id) => id !== currentUserId)
-                                : [...(col.savedBy || []), currentUserId];
-                            
-                            return {
-                                ...col,
-                                savedBy: newSavedBy,
-                                savesCount: isSaved
-                                    ? Math.max(0, (col.savesCount || 0) - 1)
-                                    : (col.savesCount || 0) + 1,
-                            };
-                        }
-                        return col;
-                    });
-                });
-            });
         },
         onSettled: () => {
             queryClient.invalidateQueries({ queryKey: ["exploreCollections"] });
@@ -225,7 +205,10 @@ function CollectionCard({ c, currentUserId }) {
 
                 {/* Footer */}
                 <div className="mt-4 pt-4 border-t border-white/5 flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0" onClick={(e) => e.preventDefault()}>
+                    <div
+                        className="flex items-center gap-2 min-w-0"
+                        onClick={(e) => e.preventDefault()}
+                    >
                         {creator?.avatar ? (
                             <img
                                 src={creator.avatar}
@@ -248,18 +231,23 @@ function CollectionCard({ c, currentUserId }) {
                             {displayName}
                         </Link>
                     </div>
-                    
+
                     <button
                         onClick={handleSaveClick}
                         disabled={saveMutation.isPending}
                         className={`group/btn flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors z-10 ${
-                            isSaved 
-                                ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20" 
+                            isSaved
+                                ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20"
                                 : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
                         }`}
-                        title={isSaved ? "Unsave collection" : "Save collection"}
+                        title={
+                            isSaved ? "Unsave collection" : "Save collection"
+                        }
                     >
-                        <Bookmark size={13} className={isSaved ? "fill-current" : ""} />
+                        <Bookmark
+                            size={13}
+                            className={isSaved ? "fill-current" : ""}
+                        />
                         <span className="text-[11px] font-medium">
                             {c.savesCount ?? 0}
                         </span>
@@ -291,9 +279,21 @@ function SkeletonCard() {
 
 // ─── Sort Tabs ────────────────────────────────────────────────────────────────────
 const SORT_TABS = [
-    { key: "new", label: "Newest", icon: <Clock size={11} className="text-slate-400" /> },
-    { key: "popular", label: "Most Saved", icon: <Flame size={11} className="text-orange-400" /> },
-    { key: "largest", label: "Largest", icon: <Layers size={11} className="text-violet-400" /> },
+    {
+        key: "new",
+        label: "Newest",
+        icon: <Clock size={11} className="text-slate-400" />,
+    },
+    {
+        key: "popular",
+        label: "Most Saved",
+        icon: <Flame size={11} className="text-orange-400" />,
+    },
+    {
+        key: "largest",
+        label: "Largest",
+        icon: <Layers size={11} className="text-violet-400" />,
+    },
 ];
 
 // ─── Main Page ────────────────────────────────────────────────────────────────────
@@ -313,7 +313,8 @@ function ExploreCollectionsPage() {
 
     const { data: collections = [], isLoading } = useQuery({
         queryKey: ["exploreCollections", debouncedSearch, sort],
-        queryFn: () => fetchCollectionsExplore({ search: debouncedSearch, sort }),
+        queryFn: () =>
+            fetchCollectionsExplore({ search: debouncedSearch, sort }),
     });
 
     const handleCreate = () =>
@@ -337,7 +338,9 @@ function ExploreCollectionsPage() {
                             <span className="text-white font-medium">
                                 {isLoading ? "—" : collections.length}
                             </span>
-                            <span className="text-slate-500">Public Collections</span>
+                            <span className="text-slate-500">
+                                Public Collections
+                            </span>
                         </div>
                         <div className="flex items-center gap-2 text-sm">
                             <Layers size={14} className="text-fuchsia-400" />
@@ -345,11 +348,14 @@ function ExploreCollectionsPage() {
                                 {isLoading
                                     ? "—"
                                     : collections.reduce(
-                                          (acc, c) => acc + (c.prompts?.length ?? 0),
+                                          (acc, c) =>
+                                              acc + (c.prompts?.length ?? 0),
                                           0,
                                       )}
                             </span>
-                            <span className="text-slate-500">Total Prompts</span>
+                            <span className="text-slate-500">
+                                Total Prompts
+                            </span>
                         </div>
                     </div>
                     <button
@@ -476,7 +482,11 @@ function ExploreCollectionsPage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                         {collections.map((c) => (
-                            <CollectionCard key={c._id} c={c} currentUserId={user?.id} />
+                            <CollectionCard
+                                key={c._id}
+                                c={c}
+                                currentUserId={user?.id}
+                            />
                         ))}
                     </div>
                 )}

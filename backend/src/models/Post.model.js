@@ -3,14 +3,11 @@ import mongoose from "mongoose";
 const postSchema = new mongoose.Schema(
     {
         // Author
-        createdByClerkId: {
-            type: String,
-            required: true,
-        },
-        createdByMongoDBObjectId: {
+        authorId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
             required: true,
+            index: true,
         },
 
         // Content
@@ -41,10 +38,7 @@ const postSchema = new mongoose.Schema(
         },
 
         // Engagement
-        likedBy: {
-            type: [String], // Clerk userIds
-            default: [],
-        },
+// Removed likedBy array; now managed by the Interaction model.
         likesCount: {
             type: Number,
             default: 0,

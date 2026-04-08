@@ -1,37 +1,61 @@
 import Follow from "../models/Follow.model.js";
-import Prompt from "../models/Prompt.model.js";
-import Notification from "../models/Notification.model.js";
-
+import User from "../models/User.model.js";
+import { createNotification } from "../utils/createNotification.js";
 
 // POST /api/follow/:userId (protected)
 export const followUser = async (req, res) => {
     try {
-        const followerId = req.auth?.userId;
-        const followingId = req.params.userId;
+        const followerClerkId = req.auth?.userId;
+        const followingClerkId = req.params.userId;
 
-        if (!followerId) {
+        if (!followerClerkId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        if (followerId === followingId) {
+        if (followerClerkId === followingClerkId) {
             return res
                 .status(400)
                 .json({ message: "You cannot follow yourself" });
         }
 
+        // Convert Clerk IDs to MongoDB IDs
+        const [follower, following] = await Promise.all([
+            User.findOne({ clerkId: followerClerkId }),
+            User.findOne({ clerkId: followingClerkId }),
+        ]);
+
+        if (!follower || !following) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const existingFollow = await Follow.findOne({
+            followerId: follower._id,
+            followingId: following._id,
+        });
+
+        if (existingFollow) {
+            return res.status(200).json({
+                message: "Already following",
+                isFollowing: true,
+            });
+        }
+
         const follow = await Follow.create({
-            followerId,
-            followingId,
+            followerId: follower._id,
+            followingId: following._id,
         });
 
-        await Notification.create({
-            userId: followingId,
+        await createNotification({
+            recipientId: following._id,
+            senderId: follower._id,
             type: "follow",
-            fromUserId: followerId,
-            message: "Started following you",
+            message: "started following you",
         });
 
-        res.status(201).json(follow);
+        res.status(201).json({
+            follow,
+            isFollowing: true,
+        });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -40,14 +64,27 @@ export const followUser = async (req, res) => {
 // DELETE /api/follow/:userId (protected)
 export const unfollowUser = async (req, res) => {
     try {
-        const followerId = req.auth?.userId;
-        const followingId = req.params.userId;
+        const followerClerkId = req.auth?.userId;
+        const followingClerkId = req.params.userId;
 
-        if (!followerId) {
+        if (!followerClerkId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        await Follow.deleteOne({ followerId, followingId });
+        // Convert Clerk IDs to MongoDB IDs
+        const [follower, following] = await Promise.all([
+            User.findOne({ clerkId: followerClerkId }),
+            User.findOne({ clerkId: followingClerkId }),
+        ]);
+
+        if (!follower || !following) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        await Follow.deleteOne({
+            followerId: follower._id,
+            followingId: following._id,
+        });
 
         res.json({ message: "Unfollowed successfully" });
     } catch (error) {
@@ -58,10 +95,17 @@ export const unfollowUser = async (req, res) => {
 // GET /api/follow/stats/:userId
 export const getFollowStats = async (req, res) => {
     try {
-        const userId = req.params.userId;
+        const clerkUserId = req.params.userId;
 
-        const followers = await Follow.countDocuments({ followingId: userId });
-        const following = await Follow.countDocuments({ followerId: userId });
+        const user = await User.findOne({ clerkId: clerkUserId });
+        if (!user) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const followers = await Follow.countDocuments({
+            followingId: user._id,
+        });
+        const following = await Follow.countDocuments({ followerId: user._id });
 
         res.json({ followers, following });
     } catch (error) {
@@ -72,14 +116,27 @@ export const getFollowStats = async (req, res) => {
 // GET /api/follow/check/:userId (protected)
 export const checkFollowing = async (req, res) => {
     try {
-        const followerId = req.auth?.userId;
-        const followingId = req.params.userId;
+        const followerClerkId = req.auth?.userId;
+        const followingClerkId = req.params.userId;
 
-        if (!followerId) {
+        if (!followerClerkId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        const exists = await Follow.findOne({ followerId, followingId });
+        // Convert Clerk IDs to MongoDB IDs
+        const [follower, following] = await Promise.all([
+            User.findOne({ clerkId: followerClerkId }),
+            User.findOne({ clerkId: followingClerkId }),
+        ]);
+
+        if (!follower || !following) {
+            return res.json({ isFollowing: false });
+        }
+
+        const exists = await Follow.findOne({
+            followerId: follower._id,
+            followingId: following._id,
+        });
 
         res.json({ isFollowing: !!exists });
     } catch (error) {
@@ -90,20 +147,26 @@ export const checkFollowing = async (req, res) => {
 // GET /api/follow/feed (protected)
 export const getFollowingFeed = async (req, res) => {
     try {
-        const userId = req.auth?.userId;
+        const clerkUserId = req.auth?.userId;
 
-        if (!userId) {
+        if (!clerkUserId) {
             return res.status(401).json({ message: "Unauthorized" });
         }
 
-        const followingList = await Follow.find({ followerId: userId }).select(
+        // Get MongoDB user ID
+        const me = await User.findOne({ clerkId: clerkUserId });
+        if (!me) {
+            return res.status(404).json({ message: "User not found" });
+        }
+
+        const followingList = await Follow.find({ followerId: me._id }).select(
             "followingId",
         );
 
-        const followingIds = followingList.map((f) => f.followingId);
+        const followingMongoIds = followingList.map((f) => f.followingId);
 
         const prompts = await Prompt.find({
-            createdByClerkId: { $in: followingIds },
+            authorId: { $in: followingMongoIds },
             visibility: "public",
         })
             .sort({ createdAt: -1 })

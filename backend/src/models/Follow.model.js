@@ -3,11 +3,13 @@ import mongoose from "mongoose";
 const followSchema = new mongoose.Schema(
     {
         followerId: {
-            type: String, // Clerk userId
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
             required: true,
         },
         followingId: {
-            type: String, // Clerk userId
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
             required: true,
         },
     },

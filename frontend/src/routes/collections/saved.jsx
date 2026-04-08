@@ -7,7 +7,10 @@ import {
     useAuth,
     useUser,
 } from "@clerk/clerk-react";
-import { fetchSavedCollections, toggleSaveCollection } from "../../lib/collectionApi.js";
+import {
+    fetchSavedCollections,
+    toggleSaveCollection,
+} from "../../lib/collectionApi.js";
 import {
     Layers,
     Globe,
@@ -41,14 +44,14 @@ function CollectionCard({ c, currentUserId }) {
     const creator = c.creator;
     const displayName = creator?.username
         ? `@${creator.username}`
-        : creator?.fullName ?? "unknown";
+        : (creator?.fullName ?? "unknown");
     const avatarLetter = (
         creator?.username?.[0] ??
         creator?.fullName?.[0] ??
         "?"
     ).toUpperCase();
 
-    const isSaved = currentUserId ? c.savedBy?.includes(currentUserId) : false;
+    const isSaved = c.isSaved;
 
     const { getToken } = useAuth();
     const queryClient = useQueryClient();
@@ -61,8 +64,10 @@ function CollectionCard({ c, currentUserId }) {
         },
         onMutate: async () => {
             // Optimistic update for my saved collections
-            const queryKeys = queryClient.getQueriesData({ queryKey: ["mySavedCollections"] });
-            
+            const queryKeys = queryClient.getQueriesData({
+                queryKey: ["mySavedCollections"],
+            });
+
             queryKeys.forEach(([queryKey, oldData]) => {
                 if (!oldData) return;
                 queryClient.setQueryData(queryKey, (old) => {
@@ -95,7 +100,10 @@ function CollectionCard({ c, currentUserId }) {
             params={{ id: c._id }}
             className="group relative flex flex-col bg-[#0A0A0A] border border-white/5 hover:border-violet-500/30 rounded-3xl overflow-hidden transition-all duration-500 hover:-translate-y-1 hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7),0_0_20px_rgba(139,92,246,0.1)]"
         >
-            <div className="h-20 w-full shrink-0 relative overflow-hidden" style={gradientStyle}>
+            <div
+                className="h-20 w-full shrink-0 relative overflow-hidden"
+                style={gradientStyle}
+            >
                 <div className="absolute inset-0 flex items-center justify-center opacity-20">
                     <Layers size={64} />
                 </div>
@@ -125,7 +133,10 @@ function CollectionCard({ c, currentUserId }) {
                 </p>
 
                 <div className="mt-4 pt-4 border-t border-white/5 flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0" onClick={(e) => e.preventDefault()}>
+                    <div
+                        className="flex items-center gap-2 min-w-0"
+                        onClick={(e) => e.preventDefault()}
+                    >
                         {creator?.avatar ? (
                             <img
                                 src={creator.avatar}
@@ -157,9 +168,14 @@ function CollectionCard({ c, currentUserId }) {
                                 ? "text-violet-400 bg-violet-500/10 hover:bg-violet-500/20"
                                 : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
                         }`}
-                        title={isSaved ? "Unsave collection" : "Save collection"}
+                        title={
+                            isSaved ? "Unsave collection" : "Save collection"
+                        }
                     >
-                        <Bookmark size={13} className={isSaved ? "fill-current" : ""} />
+                        <Bookmark
+                            size={13}
+                            className={isSaved ? "fill-current" : ""}
+                        />
                         <span className="text-[11px] font-medium">
                             {c.savesCount ?? 0}
                         </span>
@@ -204,7 +220,10 @@ function SavedCollectionsContent() {
         <div className="max-w-7xl mx-auto px-6 py-12 md:py-20">
             <div className="mb-12">
                 <h1 className="text-4xl md:text-5xl font-bold text-white tracking-tight mb-4">
-                    Saved <span className="text-transparent bg-clip-text bg-linear-to-r from-violet-400 to-fuchsia-400">Collections.</span>
+                    Saved{" "}
+                    <span className="text-transparent bg-clip-text bg-linear-to-r from-violet-400 to-fuchsia-400">
+                        Collections.
+                    </span>
                 </h1>
                 <p className="text-lg text-slate-400">
                     Your personal library of bookmarked prompt packs.
@@ -213,7 +232,10 @@ function SavedCollectionsContent() {
 
             {isLoading ? (
                 <div className="flex flex-col items-center justify-center py-20 gap-4">
-                    <Loader2 className="animate-spin text-violet-500" size={40} />
+                    <Loader2
+                        className="animate-spin text-violet-500"
+                        size={40}
+                    />
                     <p className="text-slate-500 font-medium animate-pulse">
                         Loading your saved collections...
                     </p>
@@ -233,7 +255,8 @@ function SavedCollectionsContent() {
                         No saved collections yet
                     </p>
                     <p className="text-sm text-slate-500 mb-6">
-                        Explore communities and bookmark your favorite collections.
+                        Explore communities and bookmark your favorite
+                        collections.
                     </p>
                     <Link
                         to="/collections/explore"
@@ -245,7 +268,11 @@ function SavedCollectionsContent() {
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
                     {collections.map((c) => (
-                        <CollectionCard key={c._id} c={c} currentUserId={user?.id} />
+                        <CollectionCard
+                            key={c._id}
+                            c={c}
+                            currentUserId={user?.id}
+                        />
                     ))}
                 </div>
             )}

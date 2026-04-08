@@ -2,9 +2,11 @@ import mongoose from "mongoose";
 
 const notificationSchema = new mongoose.Schema(
     {
-        userId: {
-            type: String, // who receives notification
+        recipientId: {
+            type: mongoose.Schema.Types.ObjectId, // who receives notification
+            ref: "User",
             required: true,
+            index: true,
         },
 
         type: {
@@ -13,8 +15,9 @@ const notificationSchema = new mongoose.Schema(
             required: true,
         },
 
-        fromUserId: {
-            type: String, // who triggered notification
+        senderId: {
+            type: mongoose.Schema.Types.ObjectId, // who triggered notification
+            ref: "User",
             required: true,
         },
 

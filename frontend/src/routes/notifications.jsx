@@ -159,11 +159,17 @@ function NotificationsContent() {
                                 )}
 
                                 <div className="relative shrink-0">
-                                    <img
-                                        src={n.fromUser?.imageUrl}
-                                        alt="user"
-                                        className="w-12 h-12 rounded-2xl object-cover ring-2 ring-white/5"
-                                    />
+                                    {n.fromUser?.imageUrl ? (
+                                        <img
+                                            src={n.fromUser.imageUrl}
+                                            alt="user"
+                                            className="w-12 h-12 rounded-2xl object-cover ring-2 ring-white/5"
+                                        />
+                                    ) : (
+                                        <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-lg font-bold text-white ring-2 ring-white/5">
+                                            {(n.fromUser?.username?.[0] ?? n.fromUser?.fullName?.[0] ?? "?").toUpperCase()}
+                                        </div>
+                                    )}
                                     <div className="absolute -bottom-1 -right-1 p-1.5 bg-[#030712] rounded-lg border border-white/10">
                                         {getIcon(n.type)}
                                     </div>

@@ -2,6 +2,8 @@ import Collection from "../models/Collection.model.js";
 import Prompt from "../models/Prompt.model.js";
 import User from "../models/User.model.js";
 import { createNotification } from "../utils/createNotification.js";
+import Interaction from "../models/Interaction.model.js";
+import Notification from "../models/Notification.model.js";
 
 // POST /api/collections (protected)
 export const createCollection = async (req, res) => {
@@ -22,7 +24,7 @@ export const createCollection = async (req, res) => {
             title,
             description: description || "",
             visibility: visibility || "public",
-            createdByClerkId: userId,
+            authorId: req.dbUser._id,
             prompts: [],
         });
 
@@ -35,16 +37,29 @@ export const createCollection = async (req, res) => {
 // GET /api/collections/:id (public)
 export const getCollectionById = async (req, res) => {
     try {
-        const collection = await Collection.findById(req.params.id).populate(
-            "prompts.promptId",
-            "title category tags copiesCount likesCount forksCount createdAt",
-        );
+        const collection = await Collection.findById(req.params.id)
+            .populate("authorId", "clerkId username avatar fullName")
+            .populate(
+                "prompts.promptId",
+                "title category tags copiesCount likesCount forksCount createdAt",
+            )
+            .lean();
 
         if (!collection) {
             return res.status(404).json({ message: "Collection not found" });
         }
 
-        res.json(collection);
+        let isSaved = false;
+        if (req.dbUser) {
+            const hasSaved = await Interaction.findOne({
+                userId: req.dbUser._id,
+                targetId: collection._id,
+                interactionType: "SAVE",
+            });
+            if (hasSaved) isSaved = true;
+        }
+
+        res.json({ ...collection, isSaved });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -53,12 +68,36 @@ export const getCollectionById = async (req, res) => {
 // GET /api/collections/user/:userId (public)
 export const getCollectionsByUser = async (req, res) => {
     try {
-        const collections = await Collection.find({
-            createdByClerkId: req.params.userId,
-            visibility: "public",
-        }).sort({ createdAt: -1 });
+        const targetUser = await User.findOne({ clerkId: req.params.userId });
+        if (!targetUser)
+            return res.status(404).json({ message: "User not found" });
 
-        res.json(collections);
+        const collections = await Collection.find({
+            authorId: targetUser._id,
+            visibility: "public",
+        })
+            .populate("authorId")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                interactionType: "SAVE",
+            });
+            mySavedIds = interactions
+                .filter((i) => i.targetType === "Collection")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enriched = collections.map((col) => ({
+            ...col,
+            creator: col.authorId,
+            isSaved: mySavedIds.includes(col._id.toString()),
+        }));
+
+        res.json(enriched);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -84,7 +123,7 @@ export const addPromptToCollection = async (req, res) => {
             return res.status(404).json({ message: "Collection not found" });
         }
 
-        if (collection.createdByClerkId !== userId) {
+        if (collection.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -107,12 +146,12 @@ export const addPromptToCollection = async (req, res) => {
 
         if (prompt) {
             await createNotification({
-                userId: prompt.createdByClerkId,
-                fromUserId: userId,
+                recipientId: prompt.authorId,
+                senderId: req.dbUser._id,
                 type: "collection_add",
-                promptId: prompt._id,
-                collectionId: collection._id,
-                message: `added your prompt to collection "${collection.title}"`,
+                targetId: prompt._id,
+                targetType: "Prompt",
+                message: "added your prompt to a collection",
             });
         }
 
@@ -138,7 +177,7 @@ export const removePromptFromCollection = async (req, res) => {
             return res.status(404).json({ message: "Collection not found" });
         }
 
-        if (collection.createdByClerkId !== userId) {
+        if (collection.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -174,7 +213,7 @@ export const reorderCollectionPrompts = async (req, res) => {
             return res.status(404).json({ message: "Collection not found" });
         }
 
-        if (collection.createdByClerkId !== userId) {
+        if (collection.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
@@ -205,12 +244,32 @@ export const getMyCollections = async (req, res) => {
         }
 
         const collections = await Collection.find({
-            createdByClerkId: userId,
-        }).sort({
-            createdAt: -1,
-        });
+            authorId: req.dbUser._id,
+        })
+            .populate("authorId")
+            .sort({
+                createdAt: -1,
+            })
+            .lean();
 
-        res.json(collections);
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                interactionType: "SAVE",
+            });
+            mySavedIds = interactions
+                .filter((i) => i.targetType === "Collection")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enriched = collections.map((col) => ({
+            ...col,
+            creator: col.authorId,
+            isSaved: mySavedIds.includes(col._id.toString()),
+        }));
+
+        res.json(enriched);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -220,12 +279,35 @@ export const getCollectionsByUserId = async (req, res) => {
     try {
         const userId = req.params.id;
 
-        const collections = await Collection.find({
-            createdByClerkId: userId,
-            visibility: "public",
-        }).sort({ createdAt: -1 });
+        const targetUser = await User.findOne({ clerkId: req.params.id });
+        if (!targetUser)
+            return res.status(404).json({ message: "User not found" });
 
-        res.json(collections);
+        const collections = await Collection.find({
+            authorId: targetUser._id,
+            visibility: "public",
+        })
+            .populate("authorId")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                interactionType: "SAVE",
+            });
+            mySavedIds = interactions
+                .filter((i) => i.targetType === "Collection")
+                .map((i) => i.targetId.toString());
+        }
+
+        const enriched = collections.map((col) => ({
+            ...col,
+            isSaved: mySavedIds.includes(col._id.toString()),
+        }));
+
+        res.json(enriched);
     } catch (error) {
         console.log("GET USER COLLECTIONS ERROR:", error);
         res.status(500).json({ message: error.message });
@@ -248,11 +330,17 @@ export const deleteCollection = async (req, res) => {
             return res.status(404).json({ message: "Collection not found" });
         }
 
-        if (collection.createdByClerkId !== userId) {
+        if (collection.authorId.toString() !== req.dbUser._id.toString()) {
             return res.status(403).json({ message: "Not allowed" });
         }
 
         await Collection.findByIdAndDelete(collectionId);
+
+        // Cascade cleanup: delete all Interactions (saves) for this collection
+        await Interaction.deleteMany({ targetId: collectionId, targetType: "Collection" });
+
+        // Cascade cleanup: delete all Notifications referencing this collection
+        await Notification.deleteMany({ collectionId });
 
         res.json({ message: "Collection deleted successfully" });
     } catch (error) {
@@ -277,24 +365,30 @@ export const getPublicCollections = async (req, res) => {
 
         let sortOption = { createdAt: -1 };
         if (sort === "popular") sortOption = { savesCount: -1, createdAt: -1 };
-        if (sort === "largest") sortOption = { "prompts.length": -1, createdAt: -1 };
+        if (sort === "largest")
+            sortOption = { "prompts.length": -1, createdAt: -1 };
 
         const collections = await Collection.find(filter)
+            .populate("authorId", "clerkId username avatar fullName")
             .sort(sortOption)
             .limit(60)
             .lean();
 
-        // Attach creator user data
-        const clerkIds = [...new Set(collections.map((c) => c.createdByClerkId))];
-        const users = await User.find(
-            { clerkId: { $in: clerkIds } },
-            "clerkId username avatar fullName",
-        ).lean();
-        const userMap = Object.fromEntries(users.map((u) => [u.clerkId, u]));
+        let mySavedIds = [];
+        if (req.dbUser) {
+            const interactions = await Interaction.find({
+                userId: req.dbUser._id,
+                interactionType: "SAVE",
+            });
+            mySavedIds = interactions
+                .filter((i) => i.targetType === "Collection")
+                .map((i) => i.targetId.toString());
+        }
 
         const enriched = collections.map((c) => ({
             ...c,
-            creator: userMap[c.createdByClerkId] ?? null,
+            creator: c.authorId,
+            isSaved: mySavedIds.includes(c._id.toString()),
         }));
 
         res.json(enriched);
@@ -313,20 +407,29 @@ export const toggleSaveCollection = async (req, res) => {
         if (!collection)
             return res.status(404).json({ message: "Collection not found" });
 
-        const alreadySaved = collection.savedBy.includes(userId);
+        const interaction = await Interaction.findOne({
+            userId: req.dbUser._id,
+            targetId: collection._id,
+            interactionType: "SAVE",
+        });
 
-        if (alreadySaved) {
-            collection.savedBy = collection.savedBy.filter((id) => id !== userId);
+        if (interaction) {
+            await Interaction.findByIdAndDelete(interaction._id);
             collection.savesCount = Math.max(0, collection.savesCount - 1);
         } else {
-            collection.savedBy.push(userId);
+            await Interaction.create({
+                userId: req.dbUser._id,
+                targetId: collection._id,
+                targetType: "Collection",
+                interactionType: "SAVE",
+            });
             collection.savesCount += 1;
         }
 
         await collection.save();
 
         res.json({
-            saved: !alreadySaved,
+            saved: !interaction,
             savesCount: collection.savesCount,
         });
     } catch (error) {
@@ -340,24 +443,25 @@ export const getSavedCollections = async (req, res) => {
         const userId = req.auth?.userId;
         if (!userId) return res.status(401).json({ message: "Unauthorized" });
 
+        const interactions = await Interaction.find({
+            userId: req.dbUser._id,
+            interactionType: "SAVE",
+            targetType: "Collection",
+        });
+        const savedCollectionIds = interactions.map((i) => i.targetId);
+
         const collections = await Collection.find({
-            savedBy: userId,
+            _id: { $in: savedCollectionIds },
             visibility: "public",
         })
+            .populate("authorId", "clerkId username avatar fullName")
             .sort({ createdAt: -1 })
             .lean();
 
-        // Attach creator user data
-        const clerkIds = [...new Set(collections.map((c) => c.createdByClerkId))];
-        const users = await User.find(
-            { clerkId: { $in: clerkIds } },
-            "clerkId username avatar fullName",
-        ).lean();
-        const userMap = Object.fromEntries(users.map((u) => [u.clerkId, u]));
-
         const enriched = collections.map((c) => ({
             ...c,
-            creator: userMap[c.createdByClerkId] ?? null,
+            creator: c.authorId,
+            isSaved: true,
         }));
 
         res.json(enriched);

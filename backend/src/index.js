@@ -4,6 +4,7 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { connectDB } from "./utils/connectDB.js";
+import { initQdrant } from "./services/qdrant.service.js";
 
 //Importing Routes
 import promptRoutes from "./routes/prompt.route.js";
@@ -12,8 +13,9 @@ import followRoutes from "./routes/follow.route.js";
 import notificationRoutes from "./routes/notification.route.js";
 import userRoutes from "./routes/user.route.js";
 import postRoutes from "./routes/post.route.js";
+import playgroundRoutes from "./routes/playground.route.js";
 import { syncUser } from "./middlewares/syncUser.middleware.js";
-import { requireAuth } from "./middlewares/requireAuth.middleware.js";
+// import { requireAuth } from "./middlewares/requireAuth.middleware.js";
 
 import { clerkMiddleware } from "@clerk/express";
 
@@ -36,7 +38,11 @@ app.use(
 app.use(express.json());
 app.use(
     cors({
-        origin: ["http://localhost:5173", "http://localhost:5174"],
+        origin: [
+            "http://localhost:5173",
+            "http://localhost:5174",
+            "http://localhost:5175",
+        ],
         credentials: true,
     }),
 );
@@ -59,8 +65,10 @@ app.use("/api/follow", followRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/posts", postRoutes);
+app.use("/api/playground", playgroundRoutes);
 
 app.listen(process.env.PORT, () => {
     connectDB();
+    initQdrant();
     console.log(`Server running on http://localhost:${process.env.PORT}`);
 });

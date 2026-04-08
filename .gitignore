@@ -1,0 +1,14 @@
+# Qdrant vector database storage (runtime data, regenerated from MongoDB)
+qdrant_storage/
+
+# Node
+node_modules/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -13,6 +13,7 @@ import { Route as TrendingRouteImport } from './routes/trending'
 import { Route as SignUpRouteImport } from './routes/sign-up'
 import { Route as SignInRouteImport } from './routes/sign-in'
 import { Route as SavedRouteImport } from './routes/saved'
+import { Route as PlaygroundRouteImport } from './routes/playground'
 import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as FeedRouteImport } from './routes/feed'
 import { Route as ExploreRouteImport } from './routes/explore'
@@ -48,6 +49,11 @@ const SignInRoute = SignInRouteImport.update({
 const SavedRoute = SavedRouteImport.update({
   id: '/saved',
   path: '/saved',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const PlaygroundRoute = PlaygroundRouteImport.update({
+  id: '/playground',
+  path: '/playground',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NotificationsRoute = NotificationsRouteImport.update({
@@ -137,6 +143,7 @@ export interface FileRoutesByFullPath {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/notifications': typeof NotificationsRoute
+  '/playground': typeof PlaygroundRoute
   '/saved': typeof SavedRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
@@ -159,6 +166,7 @@ export interface FileRoutesByTo {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/notifications': typeof NotificationsRoute
+  '/playground': typeof PlaygroundRoute
   '/saved': typeof SavedRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
@@ -181,6 +189,7 @@ export interface FileRoutesById {
   '/explore': typeof ExploreRoute
   '/feed': typeof FeedRoute
   '/notifications': typeof NotificationsRoute
+  '/playground': typeof PlaygroundRoute
   '/saved': typeof SavedRoute
   '/sign-in': typeof SignInRoute
   '/sign-up': typeof SignUpRoute
@@ -205,6 +214,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/notifications'
+    | '/playground'
     | '/saved'
     | '/sign-in'
     | '/sign-up'
@@ -227,6 +237,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/notifications'
+    | '/playground'
     | '/saved'
     | '/sign-in'
     | '/sign-up'
@@ -248,6 +259,7 @@ export interface FileRouteTypes {
     | '/explore'
     | '/feed'
     | '/notifications'
+    | '/playground'
     | '/saved'
     | '/sign-in'
     | '/sign-up'
@@ -271,6 +283,7 @@ export interface RootRouteChildren {
   ExploreRoute: typeof ExploreRoute
   FeedRoute: typeof FeedRoute
   NotificationsRoute: typeof NotificationsRoute
+  PlaygroundRoute: typeof PlaygroundRoute
   SavedRoute: typeof SavedRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
@@ -314,6 +327,13 @@ declare module '@tanstack/react-router' {
       path: '/saved'
       fullPath: '/saved'
       preLoaderRoute: typeof SavedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/playground': {
+      id: '/playground'
+      path: '/playground'
+      fullPath: '/playground'
+      preLoaderRoute: typeof PlaygroundRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/notifications': {
@@ -451,6 +471,7 @@ const rootRouteChildren: RootRouteChildren = {
   ExploreRoute: ExploreRoute,
   FeedRoute: FeedRoute,
   NotificationsRoute: NotificationsRoute,
+  PlaygroundRoute: PlaygroundRoute,
   SavedRoute: SavedRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,

@@ -249,13 +249,9 @@ function CollectionDetails() {
         queryFn: () => fetchCollectionById(id),
     });
 
-    const creatorId = collection?.createdByClerkId;
-
-    const { data: creator } = useQuery({
-        queryKey: ["user", creatorId],
-        queryFn: () => getUserByUserId(creatorId),
-        enabled: !!creatorId,
-    });
+    // authorId is populated User object with clerkId
+    const creatorClerkId = collection?.authorId?.clerkId;
+    const creator = collection?.authorId;
 
     const removeMutation = useMutation({
         mutationFn: async (promptId) => {
@@ -294,7 +290,7 @@ function CollectionDetails() {
             </div>
         );
 
-    const isOwner = user?.id === collection.createdByClerkId;
+    const isOwner = user?.id === collection.authorId?.clerkId;
     const sortedPrompts = [...collection.prompts].sort(
         (a, b) => a.order - b.order,
     );
@@ -364,7 +360,7 @@ function CollectionDetails() {
                 {creator && (
                     <Link
                         to="/user/$id"
-                        params={{ id: creatorId }}
+                        params={{ id: creatorClerkId }}
                         className="group inline-flex items-center gap-3 p-2 pr-6 rounded-2xl bg-[#030712] border border-white/10 hover:border-blue-500/50 transition-all shadow-xl"
                     >
                         <div className="relative">

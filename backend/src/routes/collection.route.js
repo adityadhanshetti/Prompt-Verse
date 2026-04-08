@@ -55,4 +55,3 @@ router.post("/:id/save", requireAuth(), toggleSaveCollection);
 router.delete("/:id", requireAuth(), deleteCollection);
 
 export default router;
-

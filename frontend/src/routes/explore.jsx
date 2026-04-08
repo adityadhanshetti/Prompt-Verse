@@ -1,8 +1,8 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useState, useRef, useEffect, useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { fetchPromptsAdvanced } from "../lib/promptApi.js";
-import { useUser } from "@clerk/clerk-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { fetchPromptsAdvanced, toggleLikePrompt, toggleSavePrompt } from "../lib/promptApi.js";
+import { useUser, useAuth } from "@clerk/clerk-react";
 import {
     Search,
     Filter,
@@ -21,6 +21,7 @@ import {
     Copy,
     Tag,
     Clock,
+    Brain,
 } from "lucide-react";
 
 export const Route = createFileRoute("/explore")({
@@ -434,19 +435,75 @@ function ActiveFilters({ search, category, model, tag, isTemplate, onClear }) {
 
 // ─── Prompt Card ───────────────────────────────────────────────────────────────
 function PromptCard({ p, onTagClick }) {
+    const { getToken, isSignedIn } = useAuth();
+    const queryClient = useQueryClient();
+
+    const [liked, setLiked] = useState(!!p.isLiked);
+    const [saved, setSaved] = useState(!!p.isSaved);
+    const [likesCount, setLikesCount] = useState(p.likesCount ?? 0);
+    const [savesCount, setSavesCount] = useState(p.savesCount ?? 0);
+
+    const likeMutation = useMutation({
+        mutationFn: async () => {
+            const token = await getToken();
+            return toggleLikePrompt(p._id, token);
+        },
+        onMutate: () => {
+            setLiked((prev) => !prev);
+            setLikesCount((prev) => (liked ? prev - 1 : prev + 1));
+        },
+        onSuccess: (data) => {
+            setLiked(data.liked);
+            setLikesCount(data.likesCount);
+        },
+        onError: () => {
+            setLiked((prev) => !prev);
+            setLikesCount((prev) => (liked ? prev + 1 : prev - 1));
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ["explorePrompts"] });
+        },
+    });
+
+    const saveMutation = useMutation({
+        mutationFn: async () => {
+            const token = await getToken();
+            return toggleSavePrompt(p._id, token);
+        },
+        onMutate: () => {
+            setSaved((prev) => !prev);
+            setSavesCount((prev) => (saved ? prev - 1 : prev + 1));
+        },
+        onSuccess: (data) => {
+            setSaved(data.saved);
+            setSavesCount(data.savesCount);
+        },
+        onError: () => {
+            setSaved((prev) => !prev);
+            setSavesCount((prev) => (saved ? prev + 1 : prev - 1));
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ["explorePrompts"] });
+            queryClient.invalidateQueries({ queryKey: ["savedPrompts"] });
+        },
+    });
+
     return (
         <div className="group relative flex flex-col bg-[#0A0A0A] border border-white/5 hover:border-blue-500/30 rounded-3xl p-6 transition-all duration-500 hover:-translate-y-1 hover:shadow-[0_20px_40px_-15px_rgba(0,0,0,0.7),0_0_20px_rgba(59,130,246,0.1)]">
             {/* Top row: author + badges */}
             <div className="flex items-start justify-between mb-4 gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                    <div className="size-7 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
-                        {(p.createdByMongoDBObjectId?.username ??
-                            "?")[0].toUpperCase()}
+                <Link
+                    to="/user/$id"
+                    params={{ id: p.authorId?.clerkId }}
+                    className="flex items-center gap-2 min-w-0 group/author"
+                >
+                    <div className="size-7 rounded-full bg-linear-to-br from-blue-600 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
+                        {(p.authorId?.username ?? "?")[0].toUpperCase()}
                     </div>
-                    <span className="text-[12px] font-semibold text-slate-500 truncate">
-                        @{p.createdByMongoDBObjectId?.username ?? "unknown"}
+                    <span className="text-[12px] font-semibold text-slate-500 truncate group-hover/author:text-blue-400 transition-colors">
+                        @{p.authorId?.username ?? "unknown"}
                     </span>
-                </div>
+                </Link>
                 <div className="flex items-center gap-1.5 shrink-0">
                     {p.isTemplate && (
                         <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/25 text-amber-400">
@@ -525,33 +582,44 @@ function PromptCard({ p, onTagClick }) {
                 </span>
             </div>
 
-            {/* Footer */}
+            {/* Footer — Interactive Like/Save */}
             <div className="flex items-center justify-between pt-4 border-t border-white/5">
-                <div className="flex items-center gap-4 text-slate-500">
-                    <div className="flex items-center gap-1 hover:text-red-400 transition-colors cursor-default">
-                        <Heart size={13} />
-                        <span className="text-xs font-medium">
-                            {p.likesCount ?? 0}
-                        </span>
-                    </div>
-                    <div className="flex items-center gap-1 hover:text-white transition-colors cursor-default">
+                <div className="flex items-center gap-4">
+                    {/* Like Button */}
+                    <button
+                        type="button"
+                        onClick={() => isSignedIn && likeMutation.mutate()}
+                        disabled={likeMutation.isPending}
+                        className={`flex items-center gap-1 transition-all duration-200 cursor-pointer ${liked ? "text-red-400" : "text-slate-500 hover:text-red-400"}`}
+                        title={isSignedIn ? (liked ? "Unlike" : "Like") : "Sign in to like"}
+                    >
+                        <Heart size={13} fill={liked ? "currentColor" : "none"} className={`transition-transform ${liked ? "scale-110" : ""}`} />
+                        <span className="text-xs font-medium">{likesCount}</span>
+                    </button>
+
+                    {/* Forks — static */}
+                    <div className="flex items-center gap-1 text-slate-500">
                         <GitFork size={13} />
-                        <span className="text-xs font-medium">
-                            {p.forksCount ?? 0}
-                        </span>
+                        <span className="text-xs font-medium">{p.forksCount ?? 0}</span>
                     </div>
-                    <div className="flex items-center gap-1 hover:text-white transition-colors cursor-default">
+
+                    {/* Copies — static */}
+                    <div className="flex items-center gap-1 text-slate-500">
                         <Copy size={13} />
-                        <span className="text-xs font-medium">
-                            {p.copiesCount ?? 0}
-                        </span>
+                        <span className="text-xs font-medium">{p.copiesCount ?? 0}</span>
                     </div>
-                    <div className="flex items-center gap-1 hover:text-white transition-colors cursor-default">
-                        <Bookmark size={13} />
-                        <span className="text-xs font-medium">
-                            {p.savesCount ?? 0}
-                        </span>
-                    </div>
+
+                    {/* Save Button */}
+                    <button
+                        type="button"
+                        onClick={() => isSignedIn && saveMutation.mutate()}
+                        disabled={saveMutation.isPending}
+                        className={`flex items-center gap-1 transition-all duration-200 cursor-pointer ${saved ? "text-amber-400" : "text-slate-500 hover:text-amber-400"}`}
+                        title={isSignedIn ? (saved ? "Unsave" : "Save") : "Sign in to save"}
+                    >
+                        <Bookmark size={13} fill={saved ? "currentColor" : "none"} className={`transition-transform ${saved ? "scale-110" : ""}`} />
+                        <span className="text-xs font-medium">{savesCount}</span>
+                    </button>
                 </div>
                 <div className="flex items-center gap-1 text-[10px] text-slate-600">
                     <Clock size={10} />

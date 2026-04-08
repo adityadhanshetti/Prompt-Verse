@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -8,19 +9,24 @@ import {
     Folder,
     Heart,
     Layers,
-    Pencil,
     Save,
+    Bookmark,
+    Pencil,
     Trash,
     Utensils,
     ArrowLeft,
     Share2,
+    Play,
     ExternalLink,
     User,
     User2,
+    GitFork,
+    Check,
 } from "lucide-react";
 
-// Components & API (Keep your existing imports)
+// Components & API
 import ForksSection from "../../../components/ForksSection.jsx";
+import ForkModal from "../../../components/ForkModal.jsx";
 import TemplatePromptBox from "../../../components/TemplatePromptBox.jsx";
 import VersionsSection from "../../../components/VersionsSection.jsx";
 import AddToCollection from "../../../components/AddToCollection.jsx";
@@ -29,6 +35,8 @@ import {
     incrementCopyCount,
     forkPrompt,
     deletePromptById,
+    toggleLikePrompt,
+    toggleSavePrompt,
 } from "../../../lib/promptApi.js";
 
 export const Route = createFileRoute("/prompt/$id/")({
@@ -50,7 +58,28 @@ function PromptDetails() {
         queryKey: ["prompt", id],
         queryFn: () => fetchPromptById(id),
     });
-    console.log(prompt);
+
+    // Like / Save / Fork state
+    const [liked, setLiked] = useState(false);
+    const [saved, setSaved] = useState(false);
+    const [likesCount, setLikesCount] = useState(0);
+    const [savesCount, setSavesCount] = useState(0);
+    const [copiesCount, setCopiesCount] = useState(0);
+    const [forkModalOpen, setForkModalOpen] = useState(false);
+    const [hasForked, setHasForked] = useState(false);
+
+    // Sync state when prompt loads
+    useEffect(() => {
+        if (prompt) {
+            setLiked(!!prompt.isLiked);
+            setSaved(!!prompt.isSaved);
+            setLikesCount(prompt.likesCount ?? 0);
+            setSavesCount(prompt.savesCount ?? 0);
+            setCopiesCount(prompt.copiesCount ?? 0);
+            setHasForked(prompt.hasForked || false);
+        }
+    }, [prompt?._id, prompt?.isLiked, prompt?.isSaved, prompt?.likesCount, prompt?.savesCount, prompt?.copiesCount, prompt?.hasForked]);
+
     // Mutations (Keep your existing deleteMutation, copyMutation, forkMutation)
 
     const deleteMutation = useMutation({
@@ -66,24 +95,48 @@ function PromptDetails() {
 
     const copyMutation = useMutation({
         mutationFn: () => incrementCopyCount(id),
-        onSuccess: () => {
+        onMutate: () => {
+            setCopiesCount((prev) => prev + 1);
+        },
+        onSuccess: (data) => {
+            if (data.copiesCount != null) setCopiesCount(data.copiesCount);
             queryClient.invalidateQueries(["prompt", id]);
             queryClient.invalidateQueries(["prompts"]);
+        },
+        onError: () => {
+            setCopiesCount((prev) => prev - 1);
         },
     });
 
     const forkMutation = useMutation({
-        mutationFn: async () => {
+        mutationFn: async (forkData = {}) => {
             const token = await getToken();
-            return forkPrompt(id, token);
+            return forkPrompt(id, token, forkData);
         },
         onSuccess: (newPrompt) => {
+            setForkModalOpen(false);
             queryClient.invalidateQueries(["prompt", id]);
             queryClient.invalidateQueries(["prompts"]);
             queryClient.invalidateQueries(["forks", id]);
 
             // redirect user to forked prompt
             window.location.href = `/prompt/${newPrompt._id}`;
+        },
+        onError: (error) => {
+            // Handle duplicate fork (409)
+            if (error?.response?.status === 409) {
+                const existing = error.response.data?.existingFork;
+                setHasForked(existing || true);
+                setForkModalOpen(false);
+                if (existing?._id) {
+                    const goToFork = confirm(
+                        `You've already forked this prompt as "${existing.title}". Go to your fork?`
+                    );
+                    if (goToFork) {
+                        window.location.href = `/prompt/${existing._id}`;
+                    }
+                }
+            }
         },
     });
 
@@ -93,10 +146,55 @@ function PromptDetails() {
         copyMutation.mutate();
     };
 
+    const likeMutation = useMutation({
+        mutationFn: async () => {
+            const token = await getToken();
+            return toggleLikePrompt(id, token);
+        },
+        onMutate: () => {
+            setLiked((prev) => !prev);
+            setLikesCount((prev) => (liked ? prev - 1 : prev + 1));
+        },
+        onSuccess: (data) => {
+            setLiked(data.liked);
+            setLikesCount(data.likesCount);
+        },
+        onError: () => {
+            setLiked((prev) => !prev);
+            setLikesCount((prev) => (liked ? prev + 1 : prev - 1));
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ["prompt", id] });
+        },
+    });
+
+    const saveMutation = useMutation({
+        mutationFn: async () => {
+            const token = await getToken();
+            return toggleSavePrompt(id, token);
+        },
+        onMutate: () => {
+            setSaved((prev) => !prev);
+            setSavesCount((prev) => (saved ? prev - 1 : prev + 1));
+        },
+        onSuccess: (data) => {
+            setSaved(data.saved);
+            setSavesCount(data.savesCount);
+        },
+        onError: () => {
+            setSaved((prev) => !prev);
+            setSavesCount((prev) => (saved ? prev + 1 : prev - 1));
+        },
+        onSettled: () => {
+            queryClient.invalidateQueries({ queryKey: ["prompt", id] });
+            queryClient.invalidateQueries({ queryKey: ["savedPrompts"] });
+        },
+    });
+
     if (isLoading) return <LoadingSkeleton />;
     if (isError) return <ErrorState />;
 
-    const isOwner = user?.id === prompt.createdByClerkId;
+    const isOwner = user?.id === prompt.authorId?.clerkId;
 
     return (
         <div className="min-h-screen bg-[#050505] text-slate-200 pb-20">
@@ -134,18 +232,50 @@ function PromptDetails() {
             <main className="max-w-7xl mx-auto px-6 py-10">
                 {/* Fork Banner */}
                 {prompt.forkedFrom && (
-                    <div className="mb-8 flex items-center gap-3 bg-purple-500/5 border border-purple-500/20 rounded-2xl p-4 text-purple-300">
-                        <Utensils size={18} />
-                        <p className="text-sm">
-                            Derived from{" "}
-                            <Link
-                                to="/prompt/$id"
-                                params={{ id: prompt.forkedFrom._id }}
-                                className="font-bold underline underline-offset-4 decoration-purple-500/50 hover:text-white transition-colors"
-                            >
-                                {prompt.forkedFrom.title}
-                            </Link>
-                        </p>
+                    <div className="mb-8 bg-purple-500/5 border border-purple-500/20 rounded-2xl p-5">
+                        <div className="flex items-center gap-3">
+                            <div className="size-9 rounded-xl bg-purple-500/10 flex items-center justify-center shrink-0">
+                                <GitFork size={16} className="text-purple-400" />
+                            </div>
+                            <div className="min-w-0">
+                                <p className="text-sm text-purple-300">
+                                    Forked from{" "}
+                                    <Link
+                                        to="/prompt/$id"
+                                        params={{ id: prompt.forkedFrom._id }}
+                                        className="font-bold underline underline-offset-4 decoration-purple-500/50 hover:text-white transition-colors"
+                                    >
+                                        {prompt.forkedFrom.title}
+                                    </Link>
+                                    {prompt.forkedFrom.authorId?.username && (
+                                        <span className="text-purple-400/60">
+                                            {" "}by{" "}
+                                            <Link
+                                                to="/user/$id"
+                                                params={{ id: prompt.forkedFrom.authorId.clerkId }}
+                                                className="font-semibold hover:text-white transition-colors"
+                                            >
+                                                @{prompt.forkedFrom.authorId.username}
+                                            </Link>
+                                        </span>
+                                    )}
+                                </p>
+                                {(prompt.forkedFrom.likesCount > 0 || prompt.forkedFrom.forksCount > 0) && (
+                                    <div className="flex items-center gap-3 mt-1.5">
+                                        {prompt.forkedFrom.likesCount > 0 && (
+                                            <span className="flex items-center gap-1 text-[11px] text-purple-500/50">
+                                                <Heart size={10} /> {prompt.forkedFrom.likesCount}
+                                            </span>
+                                        )}
+                                        {prompt.forkedFrom.forksCount > 0 && (
+                                            <span className="flex items-center gap-1 text-[11px] text-purple-500/50">
+                                                <Utensils size={10} /> {prompt.forkedFrom.forksCount}
+                                            </span>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
                     </div>
                 )}
 
@@ -230,21 +360,17 @@ function PromptDetails() {
                                 </h3>
                                 <Link
                                     to="/user/$id"
-                                    params={{ id: prompt.createdByClerkId }}
+                                    params={{ id: prompt.authorId?.clerkId }}
                                     className="flex items-center gap-4 group"
                                 >
                                     <div className="size-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-xl font-bold text-white shadow-lg group-hover:shadow-blue-500/30 transition-shadow">
-                                        {prompt.createdByMongoDBObjectId?.username
+                                        {prompt.authorId?.username
                                             ?.charAt(0)
                                             .toUpperCase()}
                                     </div>
                                     <div>
                                         <div className="font-bold text-white leading-tight group-hover:text-blue-400 transition-colors">
-                                            @
-                                            {
-                                                prompt.createdByMongoDBObjectId
-                                                    ?.username
-                                            }
+                                            @{prompt.authorId?.username}
                                         </div>
                                         <div className="text-sm text-slate-500">
                                             View Profile →
@@ -261,17 +387,53 @@ function PromptDetails() {
                                     <Clipboard size={18} /> Copy Prompt
                                 </button>
 
+                                {prompt.isTemplate ? (
+                                    <button
+                                        onClick={() => {
+                                            const el =
+                                                document.getElementById(
+                                                    "template-generator",
+                                                );
+                                            if (el)
+                                                el.scrollIntoView({
+                                                    behavior: "smooth",
+                                                });
+                                        }}
+                                        className="w-full bg-linear-to-r from-violet-600 to-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:opacity-90 transition-all active:scale-[0.98] cursor-pointer text-white shadow-lg shadow-violet-600/20"
+                                    >
+                                        <Play size={18} /> Fill Template to Play
+                                    </button>
+                                ) : (
+                                    <Link
+                                        to="/playground"
+                                        search={{ text: prompt.promptText }}
+                                        className="w-full bg-linear-to-r from-violet-600 to-blue-600 py-4 rounded-2xl font-bold flex items-center justify-center gap-3 hover:opacity-90 transition-all active:scale-[0.98] cursor-pointer text-white shadow-lg shadow-violet-600/20"
+                                    >
+                                        <Play size={18} /> Try in Playground
+                                    </Link>
+                                )}
+
                                 <SignedIn>
                                     <div className="grid grid-cols-2 gap-3">
-                                        <button
-                                            onClick={() =>
-                                                forkMutation.mutate()
-                                            }
-                                            disabled={forkMutation.isLoading}
-                                            className="bg-white/5 border border-white/10 py-3 rounded-2xl font-semibold flex items-center justify-center gap-2 hover:bg-white/10 transition-all"
-                                        >
-                                            <Utensils size={16} /> Fork
-                                        </button>
+                                        {hasForked ? (
+                                            <Link
+                                                to="/prompt/$id"
+                                                params={{ id: hasForked._id || id }}
+                                                className="bg-purple-500/10 border border-purple-500/25 py-3 rounded-2xl font-semibold flex items-center justify-center gap-2 text-purple-400 hover:bg-purple-500/15 transition-all text-sm"
+                                            >
+                                                <Check size={16} /> Forked
+                                            </Link>
+                                        ) : (
+                                            <button
+                                                onClick={() =>
+                                                    setForkModalOpen(true)
+                                                }
+                                                disabled={forkMutation.isPending}
+                                                className="bg-white/5 border border-white/10 py-3 rounded-2xl font-semibold flex items-center justify-center gap-2 hover:bg-purple-500/10 hover:border-purple-500/20 hover:text-purple-400 transition-all cursor-pointer text-sm"
+                                            >
+                                                <Utensils size={16} /> Fork
+                                            </button>
+                                        )}
                                         <AddToCollection promptId={id} />
                                     </div>
                                     {isOwner && (
@@ -286,6 +448,46 @@ function PromptDetails() {
                                 </SignedIn>
                             </div>
 
+                            {/* Like & Save Action Buttons */}
+                            <SignedIn>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <button
+                                        onClick={() => likeMutation.mutate()}
+                                        disabled={likeMutation.isPending}
+                                        className={`py-3 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all active:scale-[0.97] cursor-pointer border ${
+                                            liked
+                                                ? "bg-red-500/15 border-red-500/30 text-red-400"
+                                                : "bg-white/5 border-white/10 text-slate-300 hover:bg-red-500/10 hover:border-red-500/20 hover:text-red-400"
+                                        }`}
+                                    >
+                                        <Heart
+                                            size={16}
+                                            fill={liked ? "currentColor" : "none"}
+                                            className={`transition-transform ${liked ? "scale-110" : ""}`}
+                                        />
+                                        {liked ? "Liked" : "Like"}
+                                        <span className="text-xs opacity-60">({likesCount})</span>
+                                    </button>
+                                    <button
+                                        onClick={() => saveMutation.mutate()}
+                                        disabled={saveMutation.isPending}
+                                        className={`py-3 rounded-2xl font-semibold flex items-center justify-center gap-2 transition-all active:scale-[0.97] cursor-pointer border ${
+                                            saved
+                                                ? "bg-amber-500/15 border-amber-500/30 text-amber-400"
+                                                : "bg-white/5 border-white/10 text-slate-300 hover:bg-amber-500/10 hover:border-amber-500/20 hover:text-amber-400"
+                                        }`}
+                                    >
+                                        <Bookmark
+                                            size={16}
+                                            fill={saved ? "currentColor" : "none"}
+                                            className={`transition-transform ${saved ? "scale-110" : ""}`}
+                                        />
+                                        {saved ? "Saved" : "Save"}
+                                        <span className="text-xs opacity-60">({savesCount})</span>
+                                    </button>
+                                </div>
+                            </SignedIn>
+
                             {/* Quick Stats Grid */}
                             <div className="grid grid-cols-2 gap-4">
                                 {[
@@ -294,14 +496,14 @@ function PromptDetails() {
                                             <Heart className="text-red-500" />
                                         ),
                                         label: "Likes",
-                                        val: prompt.likesCount,
+                                        val: likesCount,
                                     },
                                     {
                                         icon: (
                                             <Layers className="text-blue-500" />
                                         ),
                                         label: "Uses",
-                                        val: prompt.copiesCount,
+                                        val: copiesCount,
                                     },
                                     {
                                         icon: (
@@ -312,15 +514,15 @@ function PromptDetails() {
                                     },
                                     {
                                         icon: (
-                                            <Save className="text-amber-500" />
+                                            <Bookmark className="text-amber-500" />
                                         ),
                                         label: "Saves",
-                                        val: prompt.savesCount,
+                                        val: savesCount,
                                     },
                                 ].map((stat, i) => (
                                     <div
                                         key={i}
-                                        className="bg-white/[0.03] border border-white/5 p-4 rounded-2xl text-center"
+                                        className="bg-white/3 border border-white/5 p-4 rounded-2xl text-center"
                                     >
                                         <div className="flex justify-center mb-2">
                                             {stat.icon}
@@ -338,6 +540,16 @@ function PromptDetails() {
                     </div>
                 </div>
             </main>
+
+            {/* Fork Modal */}
+            {forkModalOpen && prompt && (
+                <ForkModal
+                    prompt={prompt}
+                    onClose={() => setForkModalOpen(false)}
+                    onFork={(data) => forkMutation.mutate(data)}
+                    isPending={forkMutation.isPending}
+                />
+            )}
         </div>
     );
 }

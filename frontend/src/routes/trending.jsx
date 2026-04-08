@@ -21,6 +21,7 @@ import {
     ArrowUpRight,
     Sparkles,
     Calendar,
+    Save,
 } from "lucide-react";
 
 export const Route = createFileRoute("/trending")({
@@ -42,7 +43,7 @@ function trendingScore(p) {
         (p.likesCount ?? 0) * 3 +
         (p.forksCount ?? 0) * 5 +
         (p.copiesCount ?? 0) * 2 +
-        (p.savesCount ?? 0) 
+        (p.savesCount ?? 0)
     );
 }
 
@@ -100,6 +101,8 @@ function SpotlightCard({ prompt, rank, navigate }) {
     const score = trendingScore(prompt);
     const RankIcon = config.icon;
 
+    console.log(prompt);
+
     return (
         <div
             className={`group relative flex flex-col rounded-3xl border ${config.border} bg-gradient-to-br ${config.bg} p-6 transition-all duration-500 hover:-translate-y-2 ${config.glow} hover:shadow-[0_20px_50px_-15px_rgba(0,0,0,0.5)]`}
@@ -120,11 +123,10 @@ function SpotlightCard({ prompt, rank, navigate }) {
             {/* Author */}
             <div className="flex items-center gap-2 mb-4 mt-2">
                 <div className="size-7 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] font-bold text-white shrink-0">
-                    {(prompt.createdByMongoDBObjectId?.username ??
-                        "?")[0].toUpperCase()}
+                    {(prompt.authorId?.username ?? "?")[0].toUpperCase()}
                 </div>
                 <span className="text-xs font-semibold text-slate-400 truncate">
-                    @{prompt.createdByMongoDBObjectId?.username ?? "unknown"}
+                    @{prompt.authorId?.username ?? "unknown"}
                 </span>
                 {prompt.isTemplate && (
                     <span className="flex items-center gap-0.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-500/20 border border-purple-500/30 text-purple-400 ml-auto">
@@ -193,6 +195,12 @@ function SpotlightCard({ prompt, rank, navigate }) {
                         {prompt.copiesCount ?? 0}
                     </span>
                 </div>
+                <div className="flex items-center gap-1">
+                    <Bookmark size={12} />
+                    <span className="text-xs font-medium">
+                        {prompt.savesCount ?? 0}
+                    </span>
+                </div>
                 <div className="flex items-center gap-1 ml-auto text-[10px] text-slate-600">
                     <Clock size={9} />
                     {timeAgo(prompt.createdAt)}
@@ -240,8 +248,7 @@ function RankedRow({ prompt, rank }) {
 
             {/* Author avatar */}
             <div className="size-9 rounded-xl bg-gradient-to-br from-blue-500/30 to-purple-500/30 flex items-center justify-center text-xs font-bold text-white shrink-0 border border-white/10">
-                {(prompt.createdByMongoDBObjectId?.username ??
-                    "?")[0].toUpperCase()}
+                {(prompt.authorId?.username ?? "?")[0].toUpperCase()}
             </div>
 
             {/* Content */}
@@ -251,8 +258,7 @@ function RankedRow({ prompt, rank }) {
                 </h3>
                 <div className="flex items-center gap-2 mt-1">
                     <span className="text-[10px] text-slate-600">
-                        @
-                        {prompt.createdByMongoDBObjectId?.username ?? "unknown"}
+                        @{prompt.authorId?.username ?? "unknown"}
                     </span>
                     <span className="text-[10px] font-bold bg-blue-500/10 px-1.5 py-0.5 rounded text-blue-400 uppercase tracking-widest">
                         {prompt.category}

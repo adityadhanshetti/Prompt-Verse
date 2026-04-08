@@ -14,6 +14,7 @@ import {
     Layers,
     Zap,
     FileText,
+    Gamepad2,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -73,9 +74,13 @@ export default function Navbar() {
                                 icon={<LayoutDashboard size={16} />}
                                 label="Feed"
                             />
+                            <NavLink
+                                to="/playground"
+                                icon={<Gamepad2 size={16} />}
+                                label="Playground"
+                            />
                         </SignedIn>
                     </div>
-
                 </div>
 
                 {/* Right: Actions & User Profile */}
@@ -85,7 +90,7 @@ export default function Navbar() {
                         <div className="relative mr-2 hidden md:block">
                             <button
                                 onClick={() => setIsCreateOpen(!isCreateOpen)}
-                                className={`flex items-center gap-2 px-4 py-2 hover:bg-white/10 border rounded-full text-sm font-semibold transition-all ${isCreateOpen ? "bg-white/10 border-white/20" : "bg-white/5 border-white/10"}`}
+                                className={`cursor-pointer flex items-center gap-2 px-4 py-2 hover:bg-white/10 border rounded-full text-sm font-semibold transition-all ${isCreateOpen ? "bg-white/10 border-white/20" : "bg-white/5 border-white/10"}`}
                             >
                                 <PlusSquare
                                     size={18}
@@ -104,7 +109,7 @@ export default function Navbar() {
                                         className="fixed inset-0 z-40"
                                         onClick={() => setIsCreateOpen(false)}
                                     ></div>
-                                    <div className="absolute right-0 mt-4 w-48 bg-[#111] border border-white/10 rounded-2xl p-2 shadow-2xl animate-in fade-in zoom-in duration-200 z-50">
+                                    <div className="cursor-pointer absolute right-0 mt-4 w-48 bg-[#111] border border-white/10 rounded-2xl p-2 shadow-2xl animate-in fade-in zoom-in duration-200 z-50">
                                         <MenuLink
                                             to="/create"
                                             icon={<FileText size={18} />}

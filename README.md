@@ -2,8 +2,6 @@
 
 Prompt Verse is a professional-grade, full-stack platform designed for discovering, creating, and managing AI prompts. It serves as a centralized hub for AI enthusiasts to share their best-performing prompts, collaborate through forks, and organize their favorite discoveries into collections.
 
-![Prompt Verse Banner](https://placehold.co/1200x400/1e293b/ffffff?text=Prompt+Verse+Platform)
-
 ## ✨ Core Features
 
 ### 🔍 Discovery & Exploration
@@ -106,12 +104,4 @@ The system uses a robust relational-like structure in MongoDB:
 - [ ] Enhanced profile analytics for creators.
 - [ ] Global search across categories, tags, and users simultaneously.
 
----
 
-## 📄 License
-
-Distributed under the ISC License. See `LICENSE` for more information.
-
----
-
-Built with ❤️ by the Prompt Verse Team.
